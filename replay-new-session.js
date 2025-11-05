@@ -2,13 +2,15 @@ const fs = require("fs").promises;
 const https = require("https");
 const zlib = require("zlib");
 const gzip = require("gzip-js");
+const dotenv = require("dotenv").config();
 
 class PostHogSessionReplay {
   constructor(config) {
     this.config = {
       targetHost: config.targetHost || "us.i.posthog.com",
-      projectKey: config.projectKey,
+      projectKey: config.projectKey || process.env.POSTHOG_API_KEY,
       ssl: config.ssl !== false,
+      timestampOffset: config.timestampOffset || 86400000, // 24 hours
       ...config,
     };
   }
@@ -21,7 +23,7 @@ class PostHogSessionReplay {
         const r = (Math.random() * 16) | 0;
         const v = c === "x" ? r : (r & 0x3) | 0x8;
         return v.toString(16);
-      },
+      }
     );
   }
 
@@ -72,11 +74,11 @@ class PostHogSessionReplay {
   }
 
   // Modify the decompressed data: new session ID, keep original user ID
-  async modifyAndRecompress(originalRecording) {
+  async modifyAndRecompress(originalRecording, newSessionIdMap) {
     console.log("🔍 Analyzing original recording...");
 
     // Generate new session and window IDs (but keep original user)
-    const newSessionId = this.generateNewUUID();
+    // const newSessionId = this.generateNewUUID();
     const newWindowId = this.generateNewUUID();
 
     // Work with the decompressed data
@@ -91,6 +93,10 @@ class PostHogSessionReplay {
     const originalEvent = originalRecording.decompressed[0];
     const originalUserId = originalEvent?.properties?.distinct_id;
     const originalSessionId = originalEvent?.properties?.$session_id;
+    if (!newSessionIdMap.has(originalSessionId)) {
+      newSessionIdMap.set(originalSessionId, this.generateNewUUID());
+    }
+    const newSessionId = newSessionIdMap.get(originalSessionId);
 
     console.log(`📝 Session modification:`);
     console.log(`   Original session: ${originalSessionId}`);
@@ -99,7 +105,7 @@ class PostHogSessionReplay {
 
     // Clone and modify the decompressed data
     const modifiedEvents = JSON.parse(
-      JSON.stringify(originalRecording.decompressed),
+      JSON.stringify(originalRecording.decompressed)
     );
 
     // Fix potential undefined attributes in DOM nodes to prevent PostHog UI errors
@@ -126,9 +132,7 @@ class PostHogSessionReplay {
         // Keep original distinct_id unchanged
 
         // Update event timestamp
-        event.timestamp = new Date(
-          baseTimestamp + eventIndex * 1000,
-        ).toISOString();
+        event.timestamp = event.timestamp - this.config.timestampOffset;
 
         // Update snapshot timestamps if present
         if (
@@ -137,7 +141,7 @@ class PostHogSessionReplay {
         ) {
           event.properties.$snapshot_data.forEach((snapshot, snapshotIndex) => {
             snapshot.timestamp =
-              baseTimestamp + eventIndex * 1000 + snapshotIndex * 100;
+              snapshot.timestamp - this.config.timestampOffset;
           });
         }
       }
@@ -225,12 +229,12 @@ class PostHogSessionReplay {
     console.log(`📊 Sending ${events.length} events to PostHog...\n`);
 
     const responses = [];
-    
+
     // Send each event individually
     for (const event of events) {
       const eventName = event.event || event.properties?.event || "unknown";
       const timestamp = event.timestamp || "unknown";
-      
+
       console.log(`   📤 Sending: ${eventName} at ${timestamp}`);
 
       // Compress single event
@@ -241,7 +245,9 @@ class PostHogSessionReplay {
         const response = await this.sendToPostHog(compressed, "/e/", false);
         responses.push(response);
       } catch (error) {
-        console.error(`   ❌ Failed to send event ${eventName}: ${error.message}`);
+        console.error(
+          `   ❌ Failed to send event ${eventName}: ${error.message}`
+        );
         responses.push({ error: error.message, eventName });
       }
     }
@@ -267,22 +273,25 @@ class PostHogSessionReplay {
       }
 
       console.log(
-        `🔍 Looking for events with session ID: ${originalSessionId}`,
+        `🔍 Looking for events with session ID: ${originalSessionId}`
       );
       console.log(`📊 Total event entries in file: ${eventEntries.length}`);
 
       // Filter events that belong to the original session
       const sessionEvents = [];
       const seenSessionIds = new Set();
-      
+
       for (const entry of eventEntries) {
         let eventData = entry.data;
-        
+
         // Skip empty entries
-        if (!eventData || (typeof eventData === "object" && Object.keys(eventData).length === 0)) {
+        if (
+          !eventData ||
+          (typeof eventData === "object" && Object.keys(eventData).length === 0)
+        ) {
           continue;
         }
-        
+
         // Handle compressed events (stored as Buffer)
         if (entry.data && entry.data.type === "Buffer" && entry.data.data) {
           try {
@@ -290,11 +299,13 @@ class PostHogSessionReplay {
             const decompressed = zlib.gunzipSync(buffer);
             eventData = JSON.parse(decompressed.toString("utf8"));
           } catch (err) {
-            console.warn(`⚠️  Could not decompress event entry: ${err.message}`);
+            console.warn(
+              `⚠️  Could not decompress event entry: ${err.message}`
+            );
             continue;
           }
         }
-        
+
         // Helper function to check and collect events
         const checkEvent = (event) => {
           const sessionId = event.properties?.$session_id;
@@ -305,15 +316,17 @@ class PostHogSessionReplay {
               let eventTimestamp = event.timestamp;
               if (!eventTimestamp && event.properties?.$time) {
                 // $time is in seconds, convert to milliseconds for Date
-                eventTimestamp = new Date(event.properties.$time * 1000).toISOString();
+                eventTimestamp = new Date(
+                  event.properties.$time * 1000
+                ).toISOString();
               }
               if (!eventTimestamp) {
                 // Fall back to entry timestamp
-                eventTimestamp = entry.originalTimestamp 
+                eventTimestamp = entry.originalTimestamp
                   ? new Date(entry.originalTimestamp).toISOString()
                   : new Date().toISOString();
               }
-              
+
               sessionEvents.push({
                 ...event,
                 _originalTimestamp: eventTimestamp,
@@ -322,7 +335,7 @@ class PostHogSessionReplay {
             }
           }
         };
-        
+
         // Handle batch events format (array of events)
         if (Array.isArray(eventData)) {
           eventData.forEach(checkEvent);
@@ -344,11 +357,13 @@ class PostHogSessionReplay {
       // Debug: show what session IDs we found
       if (seenSessionIds.size > 0) {
         console.log(
-          `🔍 Found ${seenSessionIds.size} unique session ID(s) in events:`,
+          `🔍 Found ${seenSessionIds.size} unique session ID(s) in events:`
         );
-        Array.from(seenSessionIds).slice(0, 10).forEach((id) => {
-          console.log(`   - ${id}`);
-        });
+        Array.from(seenSessionIds)
+          .slice(0, 10)
+          .forEach((id) => {
+            console.log(`   - ${id}`);
+          });
         if (seenSessionIds.size > 10) {
           console.log(`   ... and ${seenSessionIds.size - 10} more`);
         }
@@ -356,26 +371,26 @@ class PostHogSessionReplay {
 
       if (sessionEvents.length === 0) {
         console.log(
-          `⚠️  No events found matching session ${originalSessionId}`,
+          `⚠️  No events found matching session ${originalSessionId}`
         );
         return [];
       }
 
       console.log(
-        `✅ Found ${sessionEvents.length} events for session ${originalSessionId}`,
+        `✅ Found ${sessionEvents.length} events for session ${originalSessionId}`
       );
 
       // Sort events by timestamp
       sessionEvents.sort(
         (a, b) =>
           new Date(a._originalTimestamp || a.timestamp) -
-          new Date(b._originalTimestamp || b.timestamp),
+          new Date(b._originalTimestamp || b.timestamp)
       );
 
       // Modify events with new session ID and updated timestamps
       const modifiedEvents = sessionEvents.map((event, index) => {
         const modified = JSON.parse(JSON.stringify(event));
-        
+
         if (modified.properties) {
           // Update session ID
           if (modified.properties.$session_id) {
@@ -385,36 +400,40 @@ class PostHogSessionReplay {
         }
 
         // Update timestamp relative to base timestamp
-        const originalTimestampValue = modified._originalTimestamp || modified.timestamp;
-        const firstEventTimestampValue = sessionEvents[0]._originalTimestamp || sessionEvents[0].timestamp;
-        
+        const originalTimestampValue =
+          modified._originalTimestamp || modified.timestamp;
+        const firstEventTimestampValue =
+          sessionEvents[0]._originalTimestamp || sessionEvents[0].timestamp;
+
         // Validate timestamps
         if (!originalTimestampValue || !firstEventTimestampValue) {
           console.warn(
-            `⚠️  Event ${index} missing timestamp, using current time`,
+            `⚠️  Event ${index} missing timestamp, using current time`
           );
           modified.timestamp = new Date().toISOString();
         } else {
           const originalTimestamp = new Date(originalTimestampValue).getTime();
-          const firstEventTimestamp = new Date(firstEventTimestampValue).getTime();
-          
+          const firstEventTimestamp = new Date(
+            firstEventTimestampValue
+          ).getTime();
+
           // Check if timestamps are valid
           if (isNaN(originalTimestamp) || isNaN(firstEventTimestamp)) {
             console.warn(
-              `⚠️  Invalid timestamp for event ${index}, using current time`,
+              `⚠️  Invalid timestamp for event ${index}, using current time`
             );
             console.warn(
-              `   Original: ${originalTimestampValue}, First: ${firstEventTimestampValue}`,
+              `   Original: ${originalTimestampValue}, First: ${firstEventTimestampValue}`
             );
             modified.timestamp = new Date().toISOString();
           } else {
             const timeOffset = originalTimestamp - firstEventTimestamp;
             const newTimestamp = baseTimestamp + timeOffset;
-            
+
             // Validate the calculated timestamp
             if (isNaN(newTimestamp) || newTimestamp < 0) {
               console.warn(
-                `⚠️  Invalid calculated timestamp for event ${index}, using current time`,
+                `⚠️  Invalid calculated timestamp for event ${index}, using current time`
               );
               modified.timestamp = new Date().toISOString();
             } else {
@@ -422,7 +441,7 @@ class PostHogSessionReplay {
             }
           }
         }
-        
+
         // Remove temporary fields
         delete modified._originalTimestamp;
         delete modified._entryTimestamp;
@@ -457,12 +476,12 @@ class PostHogSessionReplay {
               // Remove the flag since we've restored original format
               delete snapshot._original_compressed;
               console.log(
-                `🔄 Re-compressed DOM snapshot back to original format`,
+                `🔄 Re-compressed DOM snapshot back to original format`
               );
             } catch (error) {
               console.warn(
                 "Failed to re-compress DOM snapshot:",
-                error.message,
+                error.message
               );
             }
           }
@@ -478,7 +497,7 @@ class PostHogSessionReplay {
       // Load recordings
       const recordingsData = await fs.readFile(
         "./data/recordings.jsonl",
-        "utf8",
+        "utf8"
       );
       const recordings = recordingsData
         .trim()
@@ -503,10 +522,14 @@ class PostHogSessionReplay {
 
         for (const entry of eventEntries) {
           let eventData = entry.data;
-          if (!eventData || (typeof eventData === "object" && Object.keys(eventData).length === 0)) {
+          if (
+            !eventData ||
+            (typeof eventData === "object" &&
+              Object.keys(eventData).length === 0)
+          ) {
             continue;
           }
-          
+
           if (entry.data && entry.data.type === "Buffer" && entry.data.data) {
             try {
               const buffer = Buffer.from(entry.data.data);
@@ -541,14 +564,18 @@ class PostHogSessionReplay {
         // If events file doesn't exist or can't be read, continue without it
       }
 
-      console.log(`📊 Found ${eventSessionIds.size} session ID(s) with events in events.jsonl`);
+      console.log(
+        `📊 Found ${eventSessionIds.size} session ID(s) with events in events.jsonl`
+      );
       if (eventSessionIds.size > 0) {
-        console.log(`   Session IDs: ${Array.from(eventSessionIds).join(", ")}`);
+        console.log(
+          `   Session IDs: ${Array.from(eventSessionIds).join(", ")}`
+        );
       }
 
       // Find a recording that matches a session ID with events (prefer recordings with matching events)
       let testRecording = null;
-      
+
       if (eventSessionIds.size > 0) {
         // First try to find a recording that matches a session with events
         testRecording = recordings.find(
@@ -561,8 +588,8 @@ class PostHogSessionReplay {
                 event.properties?.$session_id &&
                 eventSessionIds.has(event.properties.$session_id) &&
                 event.properties?.distinct_id &&
-                event.properties?.$snapshot_data,
-            ),
+                event.properties?.$snapshot_data
+            )
         );
       }
 
@@ -577,8 +604,8 @@ class PostHogSessionReplay {
               (event) =>
                 event.properties?.$session_id &&
                 event.properties?.distinct_id &&
-                event.properties?.$snapshot_data,
-            ),
+                event.properties?.$snapshot_data
+            )
         );
       }
 
@@ -588,21 +615,28 @@ class PostHogSessionReplay {
       }
 
       // Log which recording was selected
-      const selectedSessionId = testRecording.decompressed[0]?.properties?.$session_id;
+      const selectedSessionId =
+        testRecording.decompressed[0]?.properties?.$session_id;
       if (selectedSessionId) {
         const hasMatchingEvents = eventSessionIds.has(selectedSessionId);
         console.log(
-          `✅ Selected recording with session ID: ${selectedSessionId}${hasMatchingEvents ? " (has matching events)" : " (no matching events found)"}`,
+          `✅ Selected recording with session ID: ${selectedSessionId}${
+            hasMatchingEvents
+              ? " (has matching events)"
+              : " (no matching events found)"
+          }`
         );
       }
 
       console.log(
-        `✅ Found recording with ${testRecording.decompressed.length} events`,
+        `✅ Found recording with ${testRecording.decompressed.length} events`
       );
+
+      const newSessionIds = new Map();
 
       // Modify and recompress
       const { compressed, identifiers, modifiedEvents } =
-        await this.modifyAndRecompress(testRecording);
+        await this.modifyAndRecompress(testRecording, newSessionIds);
 
       // Calculate base timestamp for events
       const now = Date.now();
@@ -614,7 +648,7 @@ class PostHogSessionReplay {
       const modifiedEventData = await this.loadAndModifyEvents(
         identifiers.originalSessionId,
         identifiers.newSessionId,
-        baseTimestamp,
+        baseTimestamp
       );
 
       // Send session recording to PostHog
@@ -625,16 +659,16 @@ class PostHogSessionReplay {
       let eventsResponses = null;
       if (modifiedEventData.length > 0) {
         eventsResponses = await this.sendEventsToPostHog(modifiedEventData);
-        
+
         // Count successful responses
         const successfulCount = eventsResponses.filter(
-          (r) => r && !r.error && r.status >= 200 && r.status < 300,
+          (r) => r && !r.error && r.status >= 200 && r.status < 300
         ).length;
         const failedCount = eventsResponses.length - successfulCount;
-        
+
         if (failedCount > 0) {
           console.log(
-            `⚠️  Events: ${successfulCount} succeeded, ${failedCount} failed`,
+            `⚠️  Events: ${successfulCount} succeeded, ${failedCount} failed`
           );
         } else {
           console.log(`✅ All ${successfulCount} events sent successfully`);
@@ -647,7 +681,7 @@ class PostHogSessionReplay {
       console.log(`   Original Session: ${identifiers.originalSessionId}`);
       console.log(`   New Session:      ${identifiers.newSessionId}`);
       console.log(
-        `   User ID:          ${identifiers.originalUserId} (same user)`,
+        `   User ID:          ${identifiers.originalUserId} (same user)`
       );
       console.log(`   Events sent:      ${modifiedEventData.length}`);
       console.log(`   Timestamp:        ${new Date().toLocaleString()}`);
@@ -691,29 +725,29 @@ async function main() {
     }
   }
 
-  if (!config.projectKey && !process.env.POSTHOG_PROJECT_KEY) {
+  if (!config.projectKey && !process.env.POSTHOG_API_KEY) {
     console.error("❌ Error: PostHog project key required");
     console.log(
-      "Usage: node replay-new-session.js --key YOUR_PROJECT_KEY [options]",
+      "Usage: node replay-new-session.js --key YOUR_PROJECT_KEY [options]"
     );
     console.log("");
     console.log(
-      "This script creates a new session for the same user from captured recordings.",
+      "This script creates a new session for the same user from captured recordings."
     );
     console.log(
-      "It preserves the original user ID but generates a new session UUID.",
+      "It preserves the original user ID but generates a new session UUID."
     );
     console.log("");
     console.log("Options:");
     console.log("  --key PROJECT_KEY        PostHog project key (required)");
     console.log(
-      "  --timestamp-offset MS    Milliseconds to offset timestamps (negative for past)",
+      "  --timestamp-offset MS    Milliseconds to offset timestamps (negative for past)"
     );
     console.log("");
     console.log("Examples:");
     console.log("  node replay-new-session.js --key phc_abc123");
     console.log(
-      "  node replay-new-session.js --key phc_abc123 --timestamp-offset -86400000  # Yesterday",
+      "  node replay-new-session.js --key phc_abc123 --timestamp-offset -86400000  # Yesterday"
     );
     process.exit(1);
   }

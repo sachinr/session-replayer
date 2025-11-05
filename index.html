@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataFlow Analytics - B2B Analytics Platform</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .header { background: #1a1a2e; color: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.5rem; font-weight: bold; }
+        .nav-buttons { display: flex; gap: 1rem; }
+        .btn { padding: 0.5rem 1rem; border: none; border-radius: 5px; cursor: pointer; text-decoration: none; display: inline-block; }
+        .btn-outline { background: transparent; color: white; border: 1px solid white; }
+        .btn-primary { background: #6366f1; color: white; }
+        .hero { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 4rem 2rem; text-align: center; }
+        .hero h1 { font-size: 3rem; margin-bottom: 1rem; }
+        .hero p { font-size: 1.2rem; margin-bottom: 2rem; max-width: 600px; margin-left: auto; margin-right: auto; }
+        .features { padding: 4rem 2rem; background: #f8fafc; }
+        .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; max-width: 1200px; margin: 0 auto; }
+        .feature { background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .feature h3 { color: #1a202c; margin-bottom: 1rem; }
+        .cta { background: #1a1a2e; color: white; padding: 4rem 2rem; text-align: center; }
+        .footer { background: #2d3748; color: #a0aec0; padding: 2rem; text-align: center; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; }
+        .modal-content { background: white; margin: 10% auto; padding: 2rem; border-radius: 10px; max-width: 400px; }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.5rem; }
+        .form-group input { width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 5px; }
+        .close { float: right; font-size: 1.5rem; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">DataFlow Analytics</div>
+        <div class="nav-buttons">
+            <button class="btn btn-outline" onclick="debugPostHog()" style="margin-right: 10px;">Debug PostHog</button>
+            <a href="#" class="btn btn-outline" id="loginBtn">Login</a>
+            <a href="#" class="btn btn-primary" id="requestDemoBtn">Request Demo</a>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <h1>Unlock Your Data's Potential</h1>
+        <p>Transform your business with powerful analytics, real-time insights, and data-driven decision making. Join thousands of companies already using DataFlow.</p>
+        <a href="#" class="btn btn-primary" id="getStartedBtn">Get Started Free</a>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features">
+        <div class="features-grid">
+            <div class="feature">
+                <h3>Real-time Analytics</h3>
+                <p>Monitor your business metrics in real-time with our advanced dashboard and alerting system.</p>
+            </div>
+            <div class="feature">
+                <h3>Custom Reports</h3>
+                <p>Create detailed reports tailored to your specific business needs and KPIs.</p>
+            </div>
+            <div class="feature">
+                <h3>Team Collaboration</h3>
+                <p>Share insights across your organization with powerful collaboration tools.</p>
+            </div>
+            <div class="feature">
+                <h3>Data Integration</h3>
+                <p>Connect all your data sources with our extensive integration library.</p>
+            </div>
+            <div class="feature">
+                <h3>Advanced Security</h3>
+                <p>Enterprise-grade security with SOC 2 compliance and data encryption.</p>
+            </div>
+            <div class="feature">
+                <h3>24/7 Support</h3>
+                <p>Get help when you need it with our dedicated customer success team.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta">
+        <h2>Ready to Transform Your Data?</h2>
+        <p>Start your free trial today and see the difference DataFlow can make.</p>
+        <a href="#" class="btn btn-primary" id="startTrialBtn">Start Free Trial</a>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>&copy; 2024 DataFlow Analytics. All rights reserved.</p>
+    </footer>
+
+    <!-- Login Modal -->
+    <div id="loginModal" class="modal">
+        <div class="modal-content">
+            <span class="close" id="closeLogin">&times;</span>
+            <h2>Login</h2>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="email">Email:</label>
+                    <input type="email" id="email" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password:</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Login</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Demo Request Modal -->
+    <div id="demoModal" class="modal">
+        <div class="modal-content">
+            <span class="close" id="closeDemo">&times;</span>
+            <h2>Request Demo</h2>
+            <form id="demoForm">
+                <div class="form-group">
+                    <label for="demoName">Full Name:</label>
+                    <input type="text" id="demoName" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label for="demoEmail">Email:</label>
+                    <input type="email" id="demoEmail" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label for="company">Company:</label>
+                    <input type="text" id="company" name="company" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Request Demo</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- PostHog SDK -->
+    <script>
+        !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+        posthog.init('phc_hu9HCgE0qWjINKwhbndTwQfmzPw4GOFX5zjMlf9ar84', {
+            api_host: 'http://localhost:3001',
+            capture_pageview: true,
+            capture_pageleave: true,
+            session_recording: {
+                recordCrossOriginIframes: true,
+                recordHeaders: true,
+                recordBody: true,
+            },
+            // Force enable session recording regardless of project settings
+            disable_session_recording: false,
+            loaded: function(posthog) {
+                console.log('🎉 PostHog loaded successfully');
+                console.log('🎬 Session recording enabled:', posthog.sessionRecordingStarted());
+
+                // Force start session recording after a delay
+                setTimeout(() => {
+                    posthog.startSessionRecording();
+                    console.log('🎬 Forced session recording start (after timeout)');
+                    console.log('🎬 Session recording status after force start:', posthog.sessionRecordingStarted());
+                }, 1000);
+            }
+        })
+    </script>
+
+    <script>
+        // Modal functionality
+        const loginModal = document.getElementById('loginModal');
+        const demoModal = document.getElementById('demoModal');
+        const loginBtn = document.getElementById('loginBtn');
+        const requestDemoBtn = document.getElementById('requestDemoBtn');
+        const getStartedBtn = document.getElementById('getStartedBtn');
+        const startTrialBtn = document.getElementById('startTrialBtn');
+        const closeLogin = document.getElementById('closeLogin');
+        const closeDemo = document.getElementById('closeDemo');
+
+        // Event tracking
+        function trackEvent(eventName, properties = {}) {
+            console.log(eventName);
+            posthog.capture(eventName, properties);
+        }
+
+        // Modal event handlers
+        loginBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            loginModal.style.display = 'block';
+            trackEvent('login_modal_opened');
+        });
+
+        requestDemoBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            demoModal.style.display = 'block';
+            trackEvent('demo_modal_opened');
+        });
+
+        getStartedBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            demoModal.style.display = 'block';
+            trackEvent('get_started_clicked');
+        });
+
+        startTrialBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            demoModal.style.display = 'block';
+            trackEvent('start_trial_clicked');
+        });
+
+        closeLogin.addEventListener('click', () => {
+            loginModal.style.display = 'none';
+            trackEvent('login_modal_closed');
+        });
+
+        closeDemo.addEventListener('click', () => {
+            demoModal.style.display = 'none';
+            trackEvent('demo_modal_closed');
+        });
+
+        // Form submissions
+        document.getElementById('loginForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            trackEvent('login_attempted', { email });
+            alert('Login functionality would be implemented here');
+            loginModal.style.display = 'none';
+        });
+
+        document.getElementById('demoForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData);
+            trackEvent('demo_requested', data);
+            alert('Thank you for requesting a demo! We\'ll be in touch soon.');
+            demoModal.style.display = 'none';
+        });
+
+        // Debug PostHog function
+        function debugPostHog() {
+            console.log('=== PostHog Debug Info ===');
+            console.log('PostHog loaded:', !!window.posthog);
+            console.log('Session recording started:', posthog.sessionRecordingStarted ? posthog.sessionRecordingStarted() : false);
+            console.log('PostHog instance:', posthog);
+            console.log('Session ID:', posthog.get_session_id ? posthog.get_session_id() : 'method not available');
+            console.log('Distinct ID:', posthog.get_distinct_id ? posthog.get_distinct_id() : 'method not available');
+
+            // Try to start recording manually
+            if (posthog.startSessionRecording) {
+                posthog.startSessionRecording();
+                console.log('🎬 Attempted to start session recording');
+
+                // Check again after starting
+                setTimeout(() => {
+                    console.log('🎬 Session recording status after manual start:', posthog.sessionRecordingStarted());
+                }, 500);
+            }
+
+            // Send a test event
+            trackEvent('debug_button_clicked', { timestamp: Date.now() });
+        }
+
+        // Track feature clicks
+        document.querySelectorAll('.feature').forEach((feature, index) => {
+            feature.addEventListener('click', () => {
+                trackEvent('feature_clicked', {
+                    feature_name: feature.querySelector('h3').textContent,
+                    feature_index: index
+                });
+            });
+        });
+
+        // Track scroll depth
+        let maxScrollDepth = 0;
+        window.addEventListener('scroll', () => {
+            const scrollDepth = Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100);
+            if (scrollDepth > maxScrollDepth) {
+                maxScrollDepth = scrollDepth;
+                if (scrollDepth % 25 === 0) { // Track every 25%
+                    trackEvent('scroll_depth', { depth: scrollDepth });
+                }
+            }
+        });
+
+        // Track time on page
+        const startTime = Date.now();
+        window.addEventListener('beforeunload', () => {
+            const timeOnPage = Math.round((Date.now() - startTime) / 1000);
+            trackEvent('time_on_page', { seconds: timeOnPage });
+        });
+
+        // Initial page load tracking
+        trackEvent('page_loaded', {
+            url: window.location.href,
+            referrer: document.referrer
+        });
+    </script>
+</body>
+</html>

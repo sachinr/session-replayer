@@ -161,7 +161,7 @@ class PostHogSessionReplay {
     };
   }
 
-  async sendToPostHog(compressedData) {
+  async sendToPostHog(compressedData, endpoint = "/s/", verbose = true) {
     const queryParams = new URLSearchParams({
       ip: "0",
       _: Date.now().toString(),
@@ -173,7 +173,7 @@ class PostHogSessionReplay {
     const options = {
       hostname: this.config.targetHost,
       port: 443,
-      path: `/s/?${queryParams.toString()}`,
+      path: `${endpoint}?${queryParams.toString()}`,
       method: "POST",
       headers: {
         "Content-Type": "text/plain",
@@ -193,14 +193,12 @@ class PostHogSessionReplay {
           responseBody += chunk;
         });
         res.on("end", () => {
-          console.log(`📥 Response: HTTP ${res.statusCode}`);
-          console.log(`📥 Response Body: ${responseBody || "(empty)"}`);
-          console.log(`📥 Response Headers:`);
-          Object.entries(res.headers).forEach(([key, value]) => {
-            console.log(`     ${key}: ${value}`);
-          });
-          console.log("");
-
+          if (verbose) {
+            console.log(`📥 Response: HTTP ${res.statusCode}`);
+            if (responseBody && responseBody.length < 500) {
+              console.log(`📥 Response Body: ${responseBody}`);
+            }
+          }
           if (res.statusCode >= 200 && res.statusCode < 300) {
             resolve({
               status: res.statusCode,
@@ -213,22 +211,233 @@ class PostHogSessionReplay {
         });
       });
 
-      // 🔍 LOG FULL REQUEST DETAILS FOR COMPARISON
-      console.log("\n📤 REPLAY SCRIPT REQUEST DETAILS:");
-      console.log(`   Method: ${options.method}`);
-      console.log(`   Host: ${options.hostname}:${options.port}`);
-      console.log(`   Path: ${options.path}`);
-      console.log(`   Headers:`);
-      Object.entries(options.headers).forEach(([key, value]) => {
-        console.log(`     ${key}: ${value}`);
-      });
-      console.log(`   Body Size: ${compressedData.length} bytes`);
-      console.log("");
-
       req.on("error", reject);
       req.write(compressedData);
       req.end();
     });
+  }
+
+  async sendEventsToPostHog(events) {
+    if (!events || events.length === 0) {
+      return null;
+    }
+
+    console.log(`📊 Sending ${events.length} events to PostHog...\n`);
+
+    const responses = [];
+    
+    // Send each event individually
+    for (const event of events) {
+      const eventName = event.event || event.properties?.event || "unknown";
+      const timestamp = event.timestamp || "unknown";
+      
+      console.log(`   📤 Sending: ${eventName} at ${timestamp}`);
+
+      // Compress single event
+      const eventJson = JSON.stringify(event);
+      const compressed = zlib.gzipSync(Buffer.from(eventJson, "utf8"));
+
+      try {
+        const response = await this.sendToPostHog(compressed, "/e/", false);
+        responses.push(response);
+      } catch (error) {
+        console.error(`   ❌ Failed to send event ${eventName}: ${error.message}`);
+        responses.push({ error: error.message, eventName });
+      }
+    }
+
+    console.log(""); // Empty line after all events
+
+    return responses;
+  }
+
+  async loadAndModifyEvents(originalSessionId, newSessionId, baseTimestamp) {
+    try {
+      // Load events
+      const eventsData = await fs.readFile("./data/events.jsonl", "utf8");
+      const eventEntries = eventsData
+        .trim()
+        .split("\n")
+        .filter((line) => line.trim())
+        .map((line) => JSON.parse(line));
+
+      if (eventEntries.length === 0) {
+        console.log("⚠️  No events found in events.jsonl");
+        return [];
+      }
+
+      console.log(
+        `🔍 Looking for events with session ID: ${originalSessionId}`,
+      );
+      console.log(`📊 Total event entries in file: ${eventEntries.length}`);
+
+      // Filter events that belong to the original session
+      const sessionEvents = [];
+      const seenSessionIds = new Set();
+      
+      for (const entry of eventEntries) {
+        let eventData = entry.data;
+        
+        // Skip empty entries
+        if (!eventData || (typeof eventData === "object" && Object.keys(eventData).length === 0)) {
+          continue;
+        }
+        
+        // Handle compressed events (stored as Buffer)
+        if (entry.data && entry.data.type === "Buffer" && entry.data.data) {
+          try {
+            const buffer = Buffer.from(entry.data.data);
+            const decompressed = zlib.gunzipSync(buffer);
+            eventData = JSON.parse(decompressed.toString("utf8"));
+          } catch (err) {
+            console.warn(`⚠️  Could not decompress event entry: ${err.message}`);
+            continue;
+          }
+        }
+        
+        // Helper function to check and collect events
+        const checkEvent = (event) => {
+          const sessionId = event.properties?.$session_id;
+          if (sessionId) {
+            seenSessionIds.add(sessionId);
+            if (sessionId === originalSessionId) {
+              // Extract timestamp from event (could be in different places)
+              let eventTimestamp = event.timestamp;
+              if (!eventTimestamp && event.properties?.$time) {
+                // $time is in seconds, convert to milliseconds for Date
+                eventTimestamp = new Date(event.properties.$time * 1000).toISOString();
+              }
+              if (!eventTimestamp) {
+                // Fall back to entry timestamp
+                eventTimestamp = entry.originalTimestamp 
+                  ? new Date(entry.originalTimestamp).toISOString()
+                  : new Date().toISOString();
+              }
+              
+              sessionEvents.push({
+                ...event,
+                _originalTimestamp: eventTimestamp,
+                _entryTimestamp: entry.originalTimestamp,
+              });
+            }
+          }
+        };
+        
+        // Handle batch events format (array of events)
+        if (Array.isArray(eventData)) {
+          eventData.forEach(checkEvent);
+        }
+        // Handle batch format with batch property
+        else if (eventData && Array.isArray(eventData.batch)) {
+          eventData.batch.forEach(checkEvent);
+        }
+        // Handle single event format
+        else if (eventData && eventData.properties) {
+          checkEvent(eventData);
+        }
+        // Handle PostHog event format (event property at top level)
+        else if (eventData && eventData.event && eventData.properties) {
+          checkEvent(eventData);
+        }
+      }
+
+      // Debug: show what session IDs we found
+      if (seenSessionIds.size > 0) {
+        console.log(
+          `🔍 Found ${seenSessionIds.size} unique session ID(s) in events:`,
+        );
+        Array.from(seenSessionIds).slice(0, 10).forEach((id) => {
+          console.log(`   - ${id}`);
+        });
+        if (seenSessionIds.size > 10) {
+          console.log(`   ... and ${seenSessionIds.size - 10} more`);
+        }
+      }
+
+      if (sessionEvents.length === 0) {
+        console.log(
+          `⚠️  No events found matching session ${originalSessionId}`,
+        );
+        return [];
+      }
+
+      console.log(
+        `✅ Found ${sessionEvents.length} events for session ${originalSessionId}`,
+      );
+
+      // Sort events by timestamp
+      sessionEvents.sort(
+        (a, b) =>
+          new Date(a._originalTimestamp || a.timestamp) -
+          new Date(b._originalTimestamp || b.timestamp),
+      );
+
+      // Modify events with new session ID and updated timestamps
+      const modifiedEvents = sessionEvents.map((event, index) => {
+        const modified = JSON.parse(JSON.stringify(event));
+        
+        if (modified.properties) {
+          // Update session ID
+          if (modified.properties.$session_id) {
+            modified.properties.$session_id = newSessionId;
+          }
+          // Keep original distinct_id unchanged
+        }
+
+        // Update timestamp relative to base timestamp
+        const originalTimestampValue = modified._originalTimestamp || modified.timestamp;
+        const firstEventTimestampValue = sessionEvents[0]._originalTimestamp || sessionEvents[0].timestamp;
+        
+        // Validate timestamps
+        if (!originalTimestampValue || !firstEventTimestampValue) {
+          console.warn(
+            `⚠️  Event ${index} missing timestamp, using current time`,
+          );
+          modified.timestamp = new Date().toISOString();
+        } else {
+          const originalTimestamp = new Date(originalTimestampValue).getTime();
+          const firstEventTimestamp = new Date(firstEventTimestampValue).getTime();
+          
+          // Check if timestamps are valid
+          if (isNaN(originalTimestamp) || isNaN(firstEventTimestamp)) {
+            console.warn(
+              `⚠️  Invalid timestamp for event ${index}, using current time`,
+            );
+            console.warn(
+              `   Original: ${originalTimestampValue}, First: ${firstEventTimestampValue}`,
+            );
+            modified.timestamp = new Date().toISOString();
+          } else {
+            const timeOffset = originalTimestamp - firstEventTimestamp;
+            const newTimestamp = baseTimestamp + timeOffset;
+            
+            // Validate the calculated timestamp
+            if (isNaN(newTimestamp) || newTimestamp < 0) {
+              console.warn(
+                `⚠️  Invalid calculated timestamp for event ${index}, using current time`,
+              );
+              modified.timestamp = new Date().toISOString();
+            } else {
+              modified.timestamp = new Date(newTimestamp).toISOString();
+            }
+          }
+        }
+        
+        // Remove temporary fields
+        delete modified._originalTimestamp;
+        delete modified._entryTimestamp;
+
+        return modified;
+      });
+
+      return modifiedEvents;
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        console.log("⚠️  events.jsonl file not found, skipping events");
+        return [];
+      }
+      throw error;
+    }
   }
 
   // Re-compress nested DOM snapshots that were originally compressed
@@ -282,23 +491,109 @@ class PostHogSessionReplay {
         return;
       }
 
-      // Find a good recording with session data
-      const testRecording = recordings.find(
-        (rec) =>
-          rec.decompressed &&
-          Array.isArray(rec.decompressed) &&
-          rec.decompressed.length > 0 &&
-          rec.decompressed.some(
-            (event) =>
-              event.properties?.$session_id &&
-              event.properties?.distinct_id &&
-              event.properties?.$snapshot_data,
-          ),
-      );
+      // First, find all session IDs from events that have data
+      const eventSessionIds = new Set();
+      try {
+        const eventsData = await fs.readFile("./data/events.jsonl", "utf8");
+        const eventEntries = eventsData
+          .trim()
+          .split("\n")
+          .filter((line) => line.trim())
+          .map((line) => JSON.parse(line));
+
+        for (const entry of eventEntries) {
+          let eventData = entry.data;
+          if (!eventData || (typeof eventData === "object" && Object.keys(eventData).length === 0)) {
+            continue;
+          }
+          
+          if (entry.data && entry.data.type === "Buffer" && entry.data.data) {
+            try {
+              const buffer = Buffer.from(entry.data.data);
+              const decompressed = zlib.gunzipSync(buffer);
+              eventData = JSON.parse(decompressed.toString("utf8"));
+            } catch (err) {
+              continue;
+            }
+          }
+
+          const extractSessionIds = (data) => {
+            if (Array.isArray(data)) {
+              data.forEach((event) => {
+                if (event.properties?.$session_id) {
+                  eventSessionIds.add(event.properties.$session_id);
+                }
+              });
+            } else if (data && data.properties?.$session_id) {
+              eventSessionIds.add(data.properties.$session_id);
+            }
+          };
+
+          if (Array.isArray(eventData)) {
+            extractSessionIds(eventData);
+          } else if (eventData && Array.isArray(eventData.batch)) {
+            extractSessionIds(eventData.batch);
+          } else if (eventData) {
+            extractSessionIds(eventData);
+          }
+        }
+      } catch (error) {
+        // If events file doesn't exist or can't be read, continue without it
+      }
+
+      console.log(`📊 Found ${eventSessionIds.size} session ID(s) with events in events.jsonl`);
+      if (eventSessionIds.size > 0) {
+        console.log(`   Session IDs: ${Array.from(eventSessionIds).join(", ")}`);
+      }
+
+      // Find a recording that matches a session ID with events (prefer recordings with matching events)
+      let testRecording = null;
+      
+      if (eventSessionIds.size > 0) {
+        // First try to find a recording that matches a session with events
+        testRecording = recordings.find(
+          (rec) =>
+            rec.decompressed &&
+            Array.isArray(rec.decompressed) &&
+            rec.decompressed.length > 0 &&
+            rec.decompressed.some(
+              (event) =>
+                event.properties?.$session_id &&
+                eventSessionIds.has(event.properties.$session_id) &&
+                event.properties?.distinct_id &&
+                event.properties?.$snapshot_data,
+            ),
+        );
+      }
+
+      // If no matching recording found, fall back to any recording with session data
+      if (!testRecording) {
+        testRecording = recordings.find(
+          (rec) =>
+            rec.decompressed &&
+            Array.isArray(rec.decompressed) &&
+            rec.decompressed.length > 0 &&
+            rec.decompressed.some(
+              (event) =>
+                event.properties?.$session_id &&
+                event.properties?.distinct_id &&
+                event.properties?.$snapshot_data,
+            ),
+        );
+      }
 
       if (!testRecording) {
         console.log("❌ No suitable recording found with session data");
         return;
+      }
+
+      // Log which recording was selected
+      const selectedSessionId = testRecording.decompressed[0]?.properties?.$session_id;
+      if (selectedSessionId) {
+        const hasMatchingEvents = eventSessionIds.has(selectedSessionId);
+        console.log(
+          `✅ Selected recording with session ID: ${selectedSessionId}${hasMatchingEvents ? " (has matching events)" : " (no matching events found)"}`,
+        );
       }
 
       console.log(
@@ -306,24 +601,64 @@ class PostHogSessionReplay {
       );
 
       // Modify and recompress
-      const { compressed, identifiers } =
+      const { compressed, identifiers, modifiedEvents } =
         await this.modifyAndRecompress(testRecording);
 
-      // Send to PostHog
-      console.log("🚀 Sending to PostHog...");
-      const response = await this.sendToPostHog(compressed);
+      // Calculate base timestamp for events
+      const now = Date.now();
+      const baseTimestamp = this.config.timestampOffset
+        ? now + this.config.timestampOffset
+        : now;
+
+      // Load and modify events from the same session
+      const modifiedEventData = await this.loadAndModifyEvents(
+        identifiers.originalSessionId,
+        identifiers.newSessionId,
+        baseTimestamp,
+      );
+
+      // Send session recording to PostHog
+      console.log("🚀 Sending session recording to PostHog...");
+      const recordingResponse = await this.sendToPostHog(compressed);
+
+      // Send events to PostHog (if any)
+      let eventsResponses = null;
+      if (modifiedEventData.length > 0) {
+        eventsResponses = await this.sendEventsToPostHog(modifiedEventData);
+        
+        // Count successful responses
+        const successfulCount = eventsResponses.filter(
+          (r) => r && !r.error && r.status >= 200 && r.status < 300,
+        ).length;
+        const failedCount = eventsResponses.length - successfulCount;
+        
+        if (failedCount > 0) {
+          console.log(
+            `⚠️  Events: ${successfulCount} succeeded, ${failedCount} failed`,
+          );
+        } else {
+          console.log(`✅ All ${successfulCount} events sent successfully`);
+        }
+      }
 
       console.log(`\n✅ New session created successfully!`);
-      console.log(`📈 Response: HTTP ${response.status}`);
+      console.log(`📈 Recording Response: HTTP ${recordingResponse.status}`);
       console.log(`🔍 Session details:`);
       console.log(`   Original Session: ${identifiers.originalSessionId}`);
       console.log(`   New Session:      ${identifiers.newSessionId}`);
       console.log(
         `   User ID:          ${identifiers.originalUserId} (same user)`,
       );
+      console.log(`   Events sent:      ${modifiedEventData.length}`);
       console.log(`   Timestamp:        ${new Date().toLocaleString()}`);
 
-      return { success: true, identifiers, response };
+      return {
+        success: true,
+        identifiers,
+        recordingResponse,
+        eventsResponses,
+        eventsCount: modifiedEventData.length,
+      };
     } catch (error) {
       console.error("\n❌ Session replay failed:", error.message);
       throw error;

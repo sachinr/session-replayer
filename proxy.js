@@ -33,9 +33,17 @@ app.use((req, res, next) => {
     const buffer = Buffer.concat(chunks);
     req.rawBody = buffer;
 
-    // Only parse if not compressed
+    // Check if data is compressed:
+    // 1. Check content-encoding header
+    // 2. Check if buffer starts with gzip magic bytes (0x1f 0x8b)
+    // 3. Check query param (if URL is parsed)
     const encoding = req.headers["content-encoding"];
-    if (!encoding && buffer.length > 0) {
+    const hasGzipMagic = buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
+    const queryCompression = req.query && req.query.compression;
+    const isCompressed = encoding || hasGzipMagic || queryCompression;
+    
+    // Only parse if not compressed
+    if (!isCompressed && buffer.length > 0) {
       const contentType = req.headers["content-type"] || "";
       if (contentType.includes("application/json")) {
         try {
@@ -47,6 +55,7 @@ app.use((req, res, next) => {
         req.body = {};
       }
     } else {
+      // Keep as buffer for decompression later
       req.body = buffer;
     }
 
@@ -278,9 +287,76 @@ app.post("/flags/*", async (req, res) => {
 app.post("/e/*", async (req, res) => {
   console.log(`📊 Event: ${req.path}`);
 
-  // Only log parsed data if not compressed
   const encoding = req.headers["content-encoding"];
-  if (!encoding && req.body && typeof req.body === "object") {
+  const isCompressed = req.query.compression === "gzip-js" || encoding === "gzip" || encoding === "deflate" || encoding === "br";
+
+  // Handle compressed events (PostHog sends events with compression: gzip-js in query)
+  // Check this first, before checking req.body
+  if (isCompressed && req.rawBody && req.rawBody.length > 0) {
+    try {
+      let decompressedData = null;
+      let originalData = req.rawBody;
+
+      // Handle different compression types
+      // PostHog uses compression: gzip-js in query params, not content-encoding header
+      if (req.query.compression === "gzip-js" || encoding === "gzip") {
+        decompressedData = zlib.gunzipSync(originalData);
+      } else if (encoding === "deflate") {
+        decompressedData = zlib.inflateSync(originalData);
+      } else if (encoding === "br") {
+        decompressedData = zlib.brotliDecompressSync(originalData);
+      }
+
+      if (decompressedData) {
+        const parsedData = JSON.parse(decompressedData.toString());
+
+        // Save decompressed data so we can access session IDs
+        await appendToJSONL("events.jsonl", {
+          type: "event",
+          data: parsedData, // Save decompressed data
+          headers: req.headers,
+          query: req.query,
+        });
+
+        console.log(
+          `📊 Event saved: ${originalData.length} bytes compressed -> ${decompressedData.length} bytes decompressed`,
+        );
+        if (Array.isArray(parsedData)) {
+          console.log(`   Found ${parsedData.length} event(s) in batch`);
+        } else if (parsedData.properties?.$session_id) {
+          console.log(`   Session ID: ${parsedData.properties.$session_id}`);
+        }
+      } else {
+        // Fallback: save compressed data info
+        await appendToJSONL("events.jsonl", {
+          type: "event",
+          data: {
+            type: "Buffer",
+            data: Array.from(originalData),
+          },
+          headers: req.headers,
+          query: req.query,
+        });
+        console.log(
+          `📊 Event saved as compressed: ${originalData.length} bytes`,
+        );
+      }
+    } catch (error) {
+      console.error("Error processing event data:", error);
+      // Fallback: save raw body info
+      await appendToJSONL("events.jsonl", {
+        type: "event",
+        data: {
+          type: "Buffer",
+          data: Array.from(req.rawBody),
+        },
+        headers: req.headers,
+        query: req.query,
+      });
+    }
+  }
+  // Handle uncompressed events
+  else if (!encoding && req.body && typeof req.body === "object" && Object.keys(req.body).length > 0) {
     console.log(`📊 Event data:`, req.body);
     // Save to JSONL
     await appendToJSONL("events.jsonl", {
@@ -290,7 +366,7 @@ app.post("/e/*", async (req, res) => {
       query: req.query,
     });
   } else {
-    console.log(`📊 Event data: ${req.rawBody ? req.rawBody.length : 0} bytes`);
+    console.log(`📊 Event data: ${req.rawBody ? req.rawBody.length : 0} bytes (not saved - empty or unknown format)`);
   }
 
   await proxyRequest(req, res, "us.i.posthog.com");

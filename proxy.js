@@ -1,12 +1,22 @@
 const express = require("express");
 const cors = require("cors");
-const fs = require("fs").promises;
 const path = require("path");
 const https = require("https");
 const zlib = require("zlib");
+const fs = require("fs");
 
 const app = express();
 const port = 3001;
+
+// Paths to JSONL files
+const EVENTS_FILE = path.join(__dirname, "data", "events.jsonl");
+const RECORDINGS_FILE = path.join(__dirname, "data", "recordings.jsonl");
+
+// Ensure data directory exists
+const dataDir = path.join(__dirname, "data");
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
 
 // Enable CORS for all routes
 app.use(
@@ -14,7 +24,7 @@ app.use(
     origin: "*",
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-  }),
+  })
 );
 
 // Custom body parser that preserves compressed data
@@ -33,17 +43,9 @@ app.use((req, res, next) => {
     const buffer = Buffer.concat(chunks);
     req.rawBody = buffer;
 
-    // Check if data is compressed:
-    // 1. Check content-encoding header
-    // 2. Check if buffer starts with gzip magic bytes (0x1f 0x8b)
-    // 3. Check query param (if URL is parsed)
-    const encoding = req.headers["content-encoding"];
-    const hasGzipMagic = buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
-    const queryCompression = req.query && req.query.compression;
-    const isCompressed = encoding || hasGzipMagic || queryCompression;
-    
     // Only parse if not compressed
-    if (!isCompressed && buffer.length > 0) {
+    const encoding = req.headers["content-encoding"];
+    if (!encoding && buffer.length > 0) {
       const contentType = req.headers["content-type"] || "";
       if (contentType.includes("application/json")) {
         try {
@@ -55,7 +57,6 @@ app.use((req, res, next) => {
         req.body = {};
       }
     } else {
-      // Keep as buffer for decompression later
       req.body = buffer;
     }
 
@@ -68,22 +69,13 @@ app.use((req, res, next) => {
   });
 });
 
-// Ensure data directory exists
-async function ensureDataDir() {
-  try {
-    await fs.access("data");
-  } catch {
-    await fs.mkdir("data");
-  }
-}
-
 // Helper function to decompress nested DOM snapshots
 async function decompressNestedSnapshots(data) {
   try {
     // If it's an array, process each item
     if (Array.isArray(data)) {
       return await Promise.all(
-        data.map((item) => decompressNestedSnapshots(item)),
+        data.map((item) => decompressNestedSnapshots(item))
       );
     }
 
@@ -119,7 +111,7 @@ async function decompressNestedSnapshots(data) {
                 }
               } catch (err) {
                 console.log(
-                  `Could not decompress DOM snapshot: ${err.message}`,
+                  `Could not decompress DOM snapshot: ${err.message}`
                 );
                 return {
                   ...snapshot,
@@ -128,7 +120,7 @@ async function decompressNestedSnapshots(data) {
               }
             }
             return snapshot;
-          }),
+          })
         );
       }
 
@@ -149,20 +141,83 @@ async function decompressNestedSnapshots(data) {
   }
 }
 
-// Append data to JSONL file
-async function appendToJSONL(filename, data) {
+// Save event to JSONL file
+async function saveEventToFile(eventData, headers, query) {
   try {
-    await ensureDataDir();
-    const filepath = path.join("data", filename);
-    const jsonLine =
-      JSON.stringify({
-        timestamp: new Date().toISOString(),
-        originalTimestamp: Date.now(),
-        ...data,
-      }) + "\n";
-    await fs.appendFile(filepath, jsonLine);
+    // Extract event type from the data - try multiple possible field names
+    const eventType =
+      eventData.event ||
+      eventData.type ||
+      eventData.name ||
+      eventData.$event ||
+      "unknown";
+
+    // Parse timestamp safely
+    let eventTimestamp = new Date();
+    if (eventData.timestamp) {
+      try {
+        eventTimestamp = new Date(eventData.timestamp);
+        if (isNaN(eventTimestamp.getTime())) {
+          eventTimestamp = new Date();
+        }
+      } catch (error) {
+        console.log(
+          `Invalid timestamp: ${eventData.timestamp}, using current time`
+        );
+        eventTimestamp = new Date();
+      }
+    }
+
+    // Create event entry in JSONL format
+    const eventEntry = {
+      timestamp: eventTimestamp.toISOString(),
+      originalTimestamp: eventTimestamp.getTime(),
+      type: "event",
+      data: eventData,
+      headers: headers,
+      query: query,
+    };
+
+    // Append to events.jsonl file
+    const line = JSON.stringify(eventEntry) + "\n";
+    fs.appendFileSync(EVENTS_FILE, line, "utf8");
+
+    console.log(`📊 Event saved to file for behavior: ${session.behaviorId}`);
   } catch (error) {
-    console.error("Error saving to JSONL:", error.message);
+    console.error("Error saving event to file:", error);
+  }
+}
+
+// Save recording to JSONL file
+async function saveRecordingToFile(
+  originalData,
+  decompressedData,
+  headers,
+  query
+) {
+  try {
+    const timestamp = new Date();
+
+    // Create recording entry in JSONL format
+    const recordingEntry = {
+      timestamp: timestamp.toISOString(),
+      originalTimestamp: timestamp.getTime(),
+      type: "recording",
+      data: originalData,
+      decompressed: decompressedData || null,
+      headers: headers,
+      query: query,
+    };
+
+    // Append to recordings.jsonl file
+    const line = JSON.stringify(recordingEntry) + "\n";
+    fs.appendFileSync(RECORDINGS_FILE, line, "utf8");
+
+    console.log(
+      `🎥 Recording saved to file for behavior: ${session.behaviorId}`
+    );
+  } catch (error) {
+    console.error("Error saving recording to file:", error);
   }
 }
 
@@ -178,7 +233,7 @@ async function proxyRequest(req, res, targetHost, targetPath = req.path) {
     const encoding = req.headers["content-encoding"];
     if (encoding) {
       console.log(
-        `📤 Sending compressed data (${encoding}): ${req.rawBody.length} bytes`,
+        `📤 Sending compressed data (${encoding}): ${req.rawBody.length} bytes`
       );
     } else {
       console.log(`📤 Sending data: ${req.rawBody.length} bytes`);
@@ -248,21 +303,6 @@ async function proxyRequest(req, res, targetHost, targetPath = req.path) {
       resolve();
     });
 
-    // 🔍 LOG FULL REQUEST DETAILS FOR COMPARISON
-    console.log("\n📤 FULL POSTHOG REQUEST DETAILS:");
-    console.log(`   Method: ${options.method}`);
-    console.log(`   Host: ${options.hostname}:${options.port}`);
-    console.log(`   Path: ${options.path}`);
-    console.log(`   Headers:`);
-    Object.entries(options.headers).forEach(([key, value]) => {
-      console.log(`     ${key}: ${value}`);
-    });
-    console.log(`   Body Size: ${postData ? postData.length : 0} bytes`);
-    if (postData && postData.length < 1000) {
-      console.log(`   Body Preview: ${postData.slice(0, 200)}...`);
-    }
-    console.log("");
-
     // Send request body if POST
     if (postData) {
       proxyReq.write(postData);
@@ -270,6 +310,72 @@ async function proxyRequest(req, res, targetHost, targetPath = req.path) {
     proxyReq.end();
   });
 }
+
+// API endpoint to start a recording session
+app.post("/api/recording/start", async (req, res) => {
+  try {
+    const { behaviorId, sessionId } = req.body;
+
+    if (!behaviorId || !sessionId) {
+      return res
+        .status(400)
+        .json({ error: "behaviorId and sessionId are required" });
+    }
+
+    console.log(
+      `🎬 Started recording session for behavior: ${behaviorId} - Session: ${sessionId}`
+    );
+
+    res.json({
+      success: true,
+      behaviorId: behaviorId,
+      sessionId: sessionId,
+    });
+  } catch (error) {
+    console.error("Error starting recording session:", error);
+    res.status(500).json({ error: "Failed to start recording session" });
+  }
+});
+
+// API endpoint to stop a recording session
+app.post("/api/recording/stop", async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: "sessionId is required" });
+    }
+
+    const behaviorId = req.body.behaviorId;
+
+    console.log(
+      `🛑 Stopped recording session for behavior: ${behaviorId} - Session: ${sessionId}`
+    );
+
+    res.json({
+      success: true,
+      message: "Recording session stopped",
+    });
+  } catch (error) {
+    console.error("Error stopping recording session:", error);
+    res.status(500).json({ error: "Failed to stop recording session" });
+  }
+});
+
+// API endpoint to get recording session status
+app.get("/api/recording/status/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+
+    res.json({
+      sessionId: sessionId,
+      status: "ACTIVE",
+    });
+  } catch (error) {
+    console.error("Error getting recording session status:", error);
+    res.status(500).json({ error: "Failed to get recording session status" });
+  }
+});
 
 // Handle static assets
 app.get("/static/*", async (req, res) => {
@@ -283,90 +389,44 @@ app.post("/flags/*", async (req, res) => {
   await proxyRequest(req, res, "us.i.posthog.com");
 });
 
-// Handle events endpoint
-app.post("/e/*", async (req, res) => {
-  console.log(`📊 Event: ${req.path}`);
+// Handle PostHog events endpoint
+app.post("/i/v0/e/*", async (req, res) => {
+  console.log(`📊 PostHog Event: ${req.path}`);
+  console.log(`📊 Content-Type: ${req.headers["content-type"]}`);
+  console.log(`📊 Content-Encoding: ${req.headers["content-encoding"]}`);
 
-  const encoding = req.headers["content-encoding"];
-  const isCompressed = req.query.compression === "gzip-js" || encoding === "gzip" || encoding === "deflate" || encoding === "br";
+  // Get current behavior info for debugging
+  // Always record the raw data - don't be smart about it
+  console.log(
+    `📊 Raw data size: ${req.rawBody ? req.rawBody.length : 0} bytes`
+  );
 
-  // Handle compressed events (PostHog sends events with compression: gzip-js in query)
-  // Check this first, before checking req.body
-  if (isCompressed && req.rawBody && req.rawBody.length > 0) {
+  if (req.rawBody && req.rawBody.length > 0) {
+    // Try to decompress and parse for logging, but always save raw data
     try {
-      let decompressedData = null;
-      let originalData = req.rawBody;
+      const decompressed = zlib.gunzipSync(req.rawBody);
+      const parsedData = JSON.parse(decompressed.toString());
+      console.log(`📊 Decompressed data:`, parsedData);
 
-      // Handle different compression types
-      // PostHog uses compression: gzip-js in query params, not content-encoding header
-      if (req.query.compression === "gzip-js" || encoding === "gzip") {
-        decompressedData = zlib.gunzipSync(originalData);
-      } else if (encoding === "deflate") {
-        decompressedData = zlib.inflateSync(originalData);
-      } else if (encoding === "br") {
-        decompressedData = zlib.brotliDecompressSync(originalData);
-      }
-
-      if (decompressedData) {
-        const parsedData = JSON.parse(decompressedData.toString());
-
-        // Save decompressed data so we can access session IDs
-        await appendToJSONL("events.jsonl", {
-          type: "event",
-          data: parsedData, // Save decompressed data
-          headers: req.headers,
-          query: req.query,
-        });
-
-        console.log(
-          `📊 Event saved: ${originalData.length} bytes compressed -> ${decompressedData.length} bytes decompressed`,
-        );
-        if (Array.isArray(parsedData)) {
-          console.log(`   Found ${parsedData.length} event(s) in batch`);
-        } else if (parsedData.properties?.$session_id) {
-          console.log(`   Session ID: ${parsedData.properties.$session_id}`);
-        }
-      } else {
-        // Fallback: save compressed data info
-        await appendToJSONL("events.jsonl", {
-          type: "event",
-          data: {
-            type: "Buffer",
-            data: Array.from(originalData),
-          },
-          headers: req.headers,
-          query: req.query,
-        });
-        console.log(
-          `📊 Event saved as compressed: ${originalData.length} bytes`,
-        );
-      }
+      // Save the decompressed data to file
+      await saveEventToFile(parsedData, req.headers, req.query);
     } catch (error) {
-      console.error("Error processing event data:", error);
-      // Fallback: save raw body info
-      await appendToJSONL("events.jsonl", {
-        type: "event",
-        data: {
-          type: "Buffer",
-          data: Array.from(req.rawBody),
-        },
-        headers: req.headers,
-        query: req.query,
-      });
+      console.log(`📊 Failed to decompress, saving raw data:`, error.message);
+
+      // If decompression fails, save the raw data as a string
+      const rawDataString = req.rawBody.toString("base64");
+      await saveEventToFile(
+        { rawData: rawDataString, error: "Failed to decompress" },
+        req.headers,
+        req.query
+      );
     }
-  }
-  // Handle uncompressed events
-  else if (!encoding && req.body && typeof req.body === "object" && Object.keys(req.body).length > 0) {
-    console.log(`📊 Event data:`, req.body);
-    // Save to JSONL
-    await appendToJSONL("events.jsonl", {
-      type: "event",
-      data: req.body,
-      headers: req.headers,
-      query: req.query,
-    });
+  } else if (req.body && Object.keys(req.body).length > 0) {
+    console.log(`📊 ${behaviorInfo} - Recording parsed PostHog data`);
+    console.log(`📊 Parsed data:`, req.body);
+    await saveEventToFile(req.body, req.headers, req.query);
   } else {
-    console.log(`📊 Event data: ${req.rawBody ? req.rawBody.length : 0} bytes (not saved - empty or unknown format)`);
+    console.log(`📊 ${behaviorInfo} - No data to record`);
   }
 
   await proxyRequest(req, res, "us.i.posthog.com");
@@ -385,12 +445,7 @@ app.post("/s/*", async (req, res) => {
     Object.keys(req.body).length > 0
   ) {
     // Uncompressed JSON data - save as is
-    await appendToJSONL("recordings.jsonl", {
-      type: "recording",
-      data: req.body,
-      headers: req.headers,
-      query: req.query,
-    });
+    await saveRecordingToFile(req.body, req.body, req.headers, req.query);
   } else if (req.rawBody && req.rawBody.length > 0) {
     // Compressed data - implement dual storage
     try {
@@ -410,52 +465,51 @@ app.post("/s/*", async (req, res) => {
         const parsedData = JSON.parse(decompressedData.toString());
 
         // Save dual format: original compressed + decompressed
-        await appendToJSONL("recordings.jsonl", {
-          type: "recording",
-          data: {
+        await saveRecordingToFile(
+          {
             type: "Buffer",
             data: Array.from(originalData), // Keep original format for PostHog compatibility
           },
-          decompressed: await decompressNestedSnapshots(parsedData), // Add fully readable format for analysis
-          headers: req.headers,
-          query: req.query,
-        });
+          await decompressNestedSnapshots(parsedData), // Add fully readable format for analysis
+          req.headers,
+          req.query
+        );
 
         console.log(
-          `🎥 Recording saved with dual storage: ${originalData.length} bytes compressed -> ${decompressedData.length} bytes decompressed`,
+          `🎥 Recording saved with dual storage: ${originalData.length} bytes compressed -> ${decompressedData.length} bytes decompressed`
         );
       } else {
         // Fallback: save as original format
-        await appendToJSONL("recordings.jsonl", {
-          type: "recording",
-          data: {
+        await saveRecordingToFile(
+          {
             type: "Buffer",
             data: Array.from(originalData),
           },
-          headers: req.headers,
-          query: req.query,
-        });
+          null,
+          req.headers,
+          req.query
+        );
         console.log(
-          `🎥 Recording saved as original: ${originalData.length} bytes`,
+          `🎥 Recording saved as original: ${originalData.length} bytes`
         );
       }
     } catch (error) {
       console.error("Error processing recording data:", error);
       // Fallback: save as original format
-      await appendToJSONL("recordings.jsonl", {
-        type: "recording",
-        data: {
+      await saveRecordingToFile(
+        {
           type: "Buffer",
           data: Array.from(req.rawBody),
         },
-        headers: req.headers,
-        query: req.query,
-      });
+        null,
+        req.headers,
+        req.query
+      );
     }
   }
 
   console.log(
-    `🎥 Recording data: ${req.rawBody ? req.rawBody.length : 0} bytes`,
+    `🎥 Recording data: ${req.rawBody ? req.rawBody.length : 0} bytes`
   );
   await proxyRequest(req, res, "us.i.posthog.com");
 });
@@ -471,7 +525,7 @@ app.get("*", async (req, res) => {
   if (req.path === "/health") {
     res.json({
       status: "ok",
-      proxy: "Working PostHog Proxy",
+      proxy: "Behavior-Aware PostHog Proxy",
       timestamp: new Date().toISOString(),
     });
     return;
@@ -482,14 +536,15 @@ app.get("*", async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`🚀 Working PostHog Proxy running on http://localhost:${port}`);
   console.log(
-    `📦 Static assets: http://localhost:${port}/static/* -> https://us-assets.i.posthog.com/static/*`,
+    `🚀 Behavior-Aware PostHog Proxy running on http://localhost:${port}`
   );
   console.log(
-    `🎯 API endpoints: http://localhost:${port}/* -> https://us.i.posthog.com/*`,
+    `📦 Static assets: http://localhost:${port}/static/* -> https://us-assets.i.posthog.com/static/*`
   );
-  console.log(`📁 Events will be saved to: data/events.jsonl`);
-  console.log(`🎬 Recordings will be saved to: data/recordings.jsonl`);
+  console.log(
+    `🎯 API endpoints: http://localhost:${port}/* -> https://us.i.posthog.com/*`
+  );
+  console.log(`🎬 Recording sessions will be saved to JSONL files`);
   console.log(`🔍 Health check: http://localhost:${port}/health`);
 });

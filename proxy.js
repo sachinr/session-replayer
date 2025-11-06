@@ -182,7 +182,7 @@ async function saveEventToFile(eventData, headers, query) {
     const line = JSON.stringify(eventEntry) + "\n";
     fs.appendFileSync(EVENTS_FILE, line, "utf8");
 
-    console.log(`📊 Event saved to file for behavior: ${eventData.event}`);
+    console.log(`📊 Event saved to file`);
   } catch (error) {
     console.error("Error saving event to file:", error);
   }
@@ -213,9 +213,7 @@ async function saveRecordingToFile(
     const line = JSON.stringify(recordingEntry) + "\n";
     fs.appendFileSync(RECORDINGS_FILE, line, "utf8");
 
-    console.log(
-      `🎥 Recording saved to file for behavior: ${behaviorId}`
-    );
+    console.log(`🎥 Recording saved to file`);
   } catch (error) {
     console.error("Error saving recording to file:", error);
   }
@@ -422,11 +420,10 @@ app.post("/i/v0/e/*", async (req, res) => {
       );
     }
   } else if (req.body && Object.keys(req.body).length > 0) {
-    console.log(`📊 ${behaviorInfo} - Recording parsed PostHog data`);
     console.log(`📊 Parsed data:`, req.body);
     await saveEventToFile(req.body, req.headers, req.query);
   } else {
-    console.log(`📊 ${behaviorInfo} - No data to record`);
+    console.log(`📊 No data to record`);
   }
 
   await proxyRequest(req, res, "us.i.posthog.com");

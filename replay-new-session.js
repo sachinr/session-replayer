@@ -407,7 +407,9 @@ class PostHogSessionReplay {
 
         // Update timestamp with same offset as recordings (subtract offset directly)
         if (modified.timestamp) {
-          modified.timestamp = new Date(new Date(modified.timestamp).getTime() - this.config.timestampOffset).toISOString();
+          modified.timestamp = new Date(
+            new Date(modified.timestamp).getTime() - this.config.timestampOffset
+          ).toISOString();
         }
 
         // Remove temporary fields
@@ -490,21 +492,10 @@ class PostHogSessionReplay {
           newWindowIds
         );
 
-        // Find and modify events for this session
-        const modifiedEvents = await this.loadAndModifyEvents(
-          identifiers.originalSessionId,
-          identifiers.newSessionId
-        );
-
         // Send session recording to PostHog
         console.log("🚀 Sending session recording to PostHog...");
         const recordingResponse = await this.sendToPostHog(compressed);
         recordingResponses.push(recordingResponse);
-
-        // Send events if any were found
-        if (modifiedEvents.length > 0) {
-          await this.sendEventsToPostHog(modifiedEvents);
-        }
 
         console.log(`\n✅ New session created successfully!`);
         console.log(
@@ -518,8 +509,18 @@ class PostHogSessionReplay {
         console.log(
           `   User ID:          ${identifiers.originalUserId} (same user)`
         );
+      });
+
+      // Find and modify events for this session
+      newSessionIds.forEach(async (newSessionId, originalSessionId) => {
+        const modifiedEvents = await this.loadAndModifyEvents(
+          originalSessionId,
+          newSessionId
+        );
+
+        // Send events if any were found
         if (modifiedEvents.length > 0) {
-          console.log(`   Events sent:      ${modifiedEvents.length}`);
+          await this.sendEventsToPostHog(modifiedEvents);
         }
       });
 

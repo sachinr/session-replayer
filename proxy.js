@@ -182,7 +182,7 @@ async function saveEventToFile(eventData, headers, query) {
     const line = JSON.stringify(eventEntry) + "\n";
     fs.appendFileSync(EVENTS_FILE, line, "utf8");
 
-    console.log(`📊 Event saved to file for behavior: ${session.behaviorId}`);
+    console.log(`📊 Event saved to file for behavior: ${eventData.event}`);
   } catch (error) {
     console.error("Error saving event to file:", error);
   }
@@ -214,7 +214,7 @@ async function saveRecordingToFile(
     fs.appendFileSync(RECORDINGS_FILE, line, "utf8");
 
     console.log(
-      `🎥 Recording saved to file for behavior: ${session.behaviorId}`
+      `🎥 Recording saved to file for behavior: ${behaviorId}`
     );
   } catch (error) {
     console.error("Error saving recording to file:", error);

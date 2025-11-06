@@ -227,40 +227,26 @@ class PostHogSessionReplay {
     });
   }
 
-  async sendEventsToPostHog(events) {
-    if (!events || events.length === 0) {
+  async sendEventsToPostHog(batchData) {
+    if (!batchData || !batchData.batch || batchData.batch.length === 0) {
       return null;
     }
 
-    console.log(`📊 Sending ${events.length} events to PostHog...\n`);
+    const eventCount = batchData.batch.length;
+    console.log(`📊 Sending batch of ${eventCount} events to PostHog...\n`);
 
-    const responses = [];
+    try {
+      // send an arry with historical_migration flag
+      const batchJson = JSON.stringify(batchData.batch);
+      const compressed = zlib.gzipSync(Buffer.from(batchJson, "utf8"));
 
-    // Send each event individually
-    for (const event of events) {
-      const eventName = event.event || event.properties?.event || "unknown";
-      const timestamp = event.timestamp || "unknown";
-
-      console.log(`   📤 Sending: ${eventName} at ${timestamp}`);
-
-      // Compress single event
-      const eventJson = JSON.stringify(event);
-      const compressed = zlib.gzipSync(Buffer.from(eventJson, "utf8"));
-
-      try {
-        const response = await this.sendToPostHog(compressed, "/e/", false);
-        responses.push(response);
-      } catch (error) {
-        console.error(
-          `   ❌ Failed to send event ${eventName}: ${error.message}`
-        );
-        responses.push({ error: error.message, eventName });
-      }
+      const response = await this.sendToPostHog(compressed, "/e/", true);
+      console.log(`✅ Batch sent successfully\n`);
+      return response;
+    } catch (error) {
+      console.error(`❌ Failed to send batch: ${error.message}\n`);
+      throw error;
     }
-
-    console.log(""); // Empty line after all events
-
-    return responses;
   }
 
   async loadAndModifyEvents(originalSessionId, newSessionId) {
@@ -275,7 +261,7 @@ class PostHogSessionReplay {
 
       if (eventEntries.length === 0) {
         console.log("⚠️  No events found in events.jsonl");
-        return [];
+        return null;
       }
 
       console.log(
@@ -283,80 +269,46 @@ class PostHogSessionReplay {
       );
       console.log(`📊 Total event entries in file: ${eventEntries.length}`);
 
-      // Filter events that belong to the original session
-      const sessionEvents = [];
+      // Collect all events from all batches that match the session
+      const allModifiedEvents = [];
       const seenSessionIds = new Set();
 
+      // each line in events.jsonl
       for (const entry of eventEntries) {
         let eventData = entry.data;
 
         // Skip empty entries
-        if (
-          !eventData ||
-          (typeof eventData === "object" && Object.keys(eventData).length === 0)
-        ) {
+        if (!eventData || !Array.isArray(eventData)) {
           continue;
         }
 
-        // Handle compressed events (stored as Buffer)
-        if (entry.data && entry.data.type === "Buffer" && entry.data.data) {
-          try {
-            const buffer = Buffer.from(entry.data.data);
-            const decompressed = zlib.gunzipSync(buffer);
-            eventData = JSON.parse(decompressed.toString("utf8"));
-          } catch (err) {
-            console.warn(
-              `⚠️  Could not decompress event entry: ${err.message}`
-            );
-            continue;
-          }
-        }
+        // get batch timeset and offset
+        const batchTimestamp = entry.originalTimestamp
+          ? new Date(entry.originalTimestamp - this.config.timestampOffset).toISOString()
+          : new Date(Date.now() - this.config.timestampOffset).toISOString();
 
-        // Helper function to check and collect events
-        const checkEvent = (event) => {
+        // process each event in batch
+        for (const event of eventData) {
           const sessionId = event.properties?.$session_id;
           if (sessionId) {
             seenSessionIds.add(sessionId);
+            
+            // Only process events matching the original session ID
             if (sessionId === originalSessionId) {
-              // Extract timestamp from event (could be in different places)
-              let eventTimestamp = event.timestamp;
-              if (!eventTimestamp && event.properties?.$time) {
-                // $time is in seconds, convert to milliseconds for Date
-                eventTimestamp = new Date(
-                  event.properties.$time * 1000
-                ).toISOString();
-              }
-              if (!eventTimestamp) {
-                // Fall back to entry timestamp
-                eventTimestamp = entry.originalTimestamp
-                  ? new Date(entry.originalTimestamp).toISOString()
-                  : new Date().toISOString();
+              // dupe event
+              const modified = JSON.parse(JSON.stringify(event));
+
+              // use new sesh id
+              if (modified.properties && modified.properties.$session_id) {
+                modified.properties.$session_id = newSessionId;
               }
 
-              sessionEvents.push({
-                ...event,
-                _originalTimestamp: eventTimestamp,
-                _entryTimestamp: entry.originalTimestamp,
-              });
+              // use the batch timestamp (with the offset applied)
+              modified.timestamp = batchTimestamp;
+
+              allModifiedEvents.push(modified);
             }
           }
-        };
-
-        // Handle batch events format (array of events)
-        if (Array.isArray(eventData)) {
-          eventData.forEach(checkEvent);
-        }
-        // Handle batch format with batch property
-        else if (eventData && Array.isArray(eventData.batch)) {
-          eventData.batch.forEach(checkEvent);
-        }
-        // Handle single event format
-        else if (eventData && eventData.properties) {
-          checkEvent(eventData);
-        }
-        // Handle PostHog event format (event property at top level)
-        else if (eventData && eventData.event && eventData.properties) {
-          checkEvent(eventData);
         }
       }
 
@@ -375,55 +327,27 @@ class PostHogSessionReplay {
         }
       }
 
-      if (sessionEvents.length === 0) {
+      if (allModifiedEvents.length === 0) {
         console.log(
           `⚠️  No events found matching session ${originalSessionId}`
         );
-        return [];
+        return null;
       }
 
       console.log(
-        `✅ Found ${sessionEvents.length} events for session ${originalSessionId}`
+        `✅ Found ${allModifiedEvents.length} events for session ${originalSessionId}`
       );
 
-      // Sort events by timestamp
-      sessionEvents.sort(
-        (a, b) =>
-          new Date(a._originalTimestamp || a.timestamp) -
-          new Date(b._originalTimestamp || b.timestamp)
-      );
-
-      // Modify events with new session ID and updated timestamps
-      const modifiedEvents = sessionEvents.map((event, index) => {
-        const modified = JSON.parse(JSON.stringify(event));
-
-        if (modified.properties) {
-          // Update session ID
-          if (modified.properties.$session_id) {
-            modified.properties.$session_id = newSessionId;
-          }
-          // Keep original distinct_id unchanged
-        }
-
-        // Update timestamp with same offset as recordings (subtract offset directly)
-        if (modified.timestamp) {
-          modified.timestamp = new Date(
-            new Date(modified.timestamp).getTime() - this.config.timestampOffset
-          ).toISOString();
-        }
-
-        // Remove temporary fields
-        delete modified._originalTimestamp;
-        delete modified._entryTimestamp;
-
-        return modified;
-      });
-
-      return modifiedEvents;
+      // need batch for histroical imports
+      return {
+        // array for batch 
+        batch: allModifiedEvents,
+        historical_migration: true,
+      };
     } catch (error) {
       if (error.code === "ENOENT") {
         console.log("⚠️  events.jsonl file not found, skipping events");
-        return [];
+        return null;
       }
       throw error;
     }
@@ -513,14 +437,14 @@ class PostHogSessionReplay {
 
       // Find and modify events for this session
       newSessionIds.forEach(async (newSessionId, originalSessionId) => {
-        const modifiedEvents = await this.loadAndModifyEvents(
+        const batchData = await this.loadAndModifyEvents(
           originalSessionId,
           newSessionId
         );
 
-        // Send events if any were found
-        if (modifiedEvents.length > 0) {
-          await this.sendEventsToPostHog(modifiedEvents);
+        // Send batch if events were found
+        if (batchData) {
+          await this.sendEventsToPostHog(batchData);
         }
       });
 

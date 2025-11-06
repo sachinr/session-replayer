@@ -263,7 +263,7 @@ class PostHogSessionReplay {
     return responses;
   }
 
-  async loadAndModifyEvents(originalSessionId, newSessionId, baseTimestamp) {
+  async loadAndModifyEvents(originalSessionId, newSessionId) {
     try {
       // Load events
       const eventsData = await fs.readFile("./data/events.jsonl", "utf8");
@@ -405,47 +405,9 @@ class PostHogSessionReplay {
           // Keep original distinct_id unchanged
         }
 
-        // Update timestamp relative to base timestamp
-        const originalTimestampValue =
-          modified._originalTimestamp || modified.timestamp;
-        const firstEventTimestampValue =
-          sessionEvents[0]._originalTimestamp || sessionEvents[0].timestamp;
-
-        // Validate timestamps
-        if (!originalTimestampValue || !firstEventTimestampValue) {
-          console.warn(
-            `⚠️  Event ${index} missing timestamp, using current time`
-          );
-          modified.timestamp = new Date().toISOString();
-        } else {
-          const originalTimestamp = new Date(originalTimestampValue).getTime();
-          const firstEventTimestamp = new Date(
-            firstEventTimestampValue
-          ).getTime();
-
-          // Check if timestamps are valid
-          if (isNaN(originalTimestamp) || isNaN(firstEventTimestamp)) {
-            console.warn(
-              `⚠️  Invalid timestamp for event ${index}, using current time`
-            );
-            console.warn(
-              `   Original: ${originalTimestampValue}, First: ${firstEventTimestampValue}`
-            );
-            modified.timestamp = new Date().toISOString();
-          } else {
-            const timeOffset = originalTimestamp - firstEventTimestamp;
-            const newTimestamp = baseTimestamp + timeOffset;
-
-            // Validate the calculated timestamp
-            if (isNaN(newTimestamp) || newTimestamp < 0) {
-              console.warn(
-                `⚠️  Invalid calculated timestamp for event ${index}, using current time`
-              );
-              modified.timestamp = new Date().toISOString();
-            } else {
-              modified.timestamp = new Date(newTimestamp).toISOString();
-            }
-          }
+        // Update timestamp with same offset as recordings (subtract offset directly)
+        if (modified.timestamp) {
+          modified.timestamp = new Date(new Date(modified.timestamp).getTime() - this.config.timestampOffset).toISOString();
         }
 
         // Remove temporary fields
@@ -528,10 +490,21 @@ class PostHogSessionReplay {
           newWindowIds
         );
 
+        // Find and modify events for this session
+        const modifiedEvents = await this.loadAndModifyEvents(
+          identifiers.originalSessionId,
+          identifiers.newSessionId
+        );
+
         // Send session recording to PostHog
         console.log("🚀 Sending session recording to PostHog...");
         const recordingResponse = await this.sendToPostHog(compressed);
         recordingResponses.push(recordingResponse);
+
+        // Send events if any were found
+        if (modifiedEvents.length > 0) {
+          await this.sendEventsToPostHog(modifiedEvents);
+        }
 
         console.log(`\n✅ New session created successfully!`);
         console.log(
@@ -545,6 +518,9 @@ class PostHogSessionReplay {
         console.log(
           `   User ID:          ${identifiers.originalUserId} (same user)`
         );
+        if (modifiedEvents.length > 0) {
+          console.log(`   Events sent:      ${modifiedEvents.length}`);
+        }
       });
 
       return {

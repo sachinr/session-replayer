@@ -1,8 +1,8 @@
 const fs = require("fs").promises;
 const https = require("https");
 const zlib = require("zlib");
-const gzip = require("gzip-js");
-const dotenv = require("dotenv").config();
+
+require("dotenv").config();
 
 class PostHogSessionReplay {
   constructor(config) {
@@ -74,12 +74,12 @@ class PostHogSessionReplay {
   }
 
   // Modify the decompressed data: new session ID, keep original user ID
-  async modifyAndRecompress(originalRecording, newSessionIdMap) {
+  async modifyAndRecompress(
+    originalRecording,
+    newSessionIdMap,
+    newWindowIdMap
+  ) {
     console.log("🔍 Analyzing original recording...");
-
-    // Generate new session and window IDs (but keep original user)
-    // const newSessionId = this.generateNewUUID();
-    const newWindowId = this.generateNewUUID();
 
     // Work with the decompressed data
     if (
@@ -93,10 +93,16 @@ class PostHogSessionReplay {
     const originalEvent = originalRecording.decompressed[0];
     const originalUserId = originalEvent?.properties?.distinct_id;
     const originalSessionId = originalEvent?.properties?.$session_id;
+    const originalWindowId = originalEvent?.properties?.$window_id;
+
     if (!newSessionIdMap.has(originalSessionId)) {
       newSessionIdMap.set(originalSessionId, this.generateNewUUID());
     }
+    if (!newWindowIdMap.has(originalWindowId)) {
+      newWindowIdMap.set(originalWindowId, this.generateNewUUID());
+    }
     const newSessionId = newSessionIdMap.get(originalSessionId);
+    const newWindowId = newWindowIdMap.get(originalWindowId);
 
     console.log(`📝 Session modification:`);
     console.log(`   Original session: ${originalSessionId}`);
@@ -510,188 +516,40 @@ class PostHogSessionReplay {
         return;
       }
 
-      // First, find all session IDs from events that have data
-      const eventSessionIds = new Set();
-      try {
-        const eventsData = await fs.readFile("./data/events.jsonl", "utf8");
-        const eventEntries = eventsData
-          .trim()
-          .split("\n")
-          .filter((line) => line.trim())
-          .map((line) => JSON.parse(line));
-
-        for (const entry of eventEntries) {
-          let eventData = entry.data;
-          if (
-            !eventData ||
-            (typeof eventData === "object" &&
-              Object.keys(eventData).length === 0)
-          ) {
-            continue;
-          }
-
-          if (entry.data && entry.data.type === "Buffer" && entry.data.data) {
-            try {
-              const buffer = Buffer.from(entry.data.data);
-              const decompressed = zlib.gunzipSync(buffer);
-              eventData = JSON.parse(decompressed.toString("utf8"));
-            } catch (err) {
-              continue;
-            }
-          }
-
-          const extractSessionIds = (data) => {
-            if (Array.isArray(data)) {
-              data.forEach((event) => {
-                if (event.properties?.$session_id) {
-                  eventSessionIds.add(event.properties.$session_id);
-                }
-              });
-            } else if (data && data.properties?.$session_id) {
-              eventSessionIds.add(data.properties.$session_id);
-            }
-          };
-
-          if (Array.isArray(eventData)) {
-            extractSessionIds(eventData);
-          } else if (eventData && Array.isArray(eventData.batch)) {
-            extractSessionIds(eventData.batch);
-          } else if (eventData) {
-            extractSessionIds(eventData);
-          }
-        }
-      } catch (error) {
-        // If events file doesn't exist or can't be read, continue without it
-      }
-
-      console.log(
-        `📊 Found ${eventSessionIds.size} session ID(s) with events in events.jsonl`
-      );
-      if (eventSessionIds.size > 0) {
-        console.log(
-          `   Session IDs: ${Array.from(eventSessionIds).join(", ")}`
-        );
-      }
-
-      // Find a recording that matches a session ID with events (prefer recordings with matching events)
-      let testRecording = null;
-
-      if (eventSessionIds.size > 0) {
-        // First try to find a recording that matches a session with events
-        testRecording = recordings.find(
-          (rec) =>
-            rec.decompressed &&
-            Array.isArray(rec.decompressed) &&
-            rec.decompressed.length > 0 &&
-            rec.decompressed.some(
-              (event) =>
-                event.properties?.$session_id &&
-                eventSessionIds.has(event.properties.$session_id) &&
-                event.properties?.distinct_id &&
-                event.properties?.$snapshot_data
-            )
-        );
-      }
-
-      // If no matching recording found, fall back to any recording with session data
-      if (!testRecording) {
-        testRecording = recordings.find(
-          (rec) =>
-            rec.decompressed &&
-            Array.isArray(rec.decompressed) &&
-            rec.decompressed.length > 0 &&
-            rec.decompressed.some(
-              (event) =>
-                event.properties?.$session_id &&
-                event.properties?.distinct_id &&
-                event.properties?.$snapshot_data
-            )
-        );
-      }
-
-      if (!testRecording) {
-        console.log("❌ No suitable recording found with session data");
-        return;
-      }
-
-      // Log which recording was selected
-      const selectedSessionId =
-        testRecording.decompressed[0]?.properties?.$session_id;
-      if (selectedSessionId) {
-        const hasMatchingEvents = eventSessionIds.has(selectedSessionId);
-        console.log(
-          `✅ Selected recording with session ID: ${selectedSessionId}${
-            hasMatchingEvents
-              ? " (has matching events)"
-              : " (no matching events found)"
-          }`
-        );
-      }
-
-      console.log(
-        `✅ Found recording with ${testRecording.decompressed.length} events`
-      );
-
       const newSessionIds = new Map();
+      const newWindowIds = new Map();
+      const recordingResponses = [];
 
-      // Modify and recompress
-      const { compressed, identifiers, modifiedEvents } =
-        await this.modifyAndRecompress(testRecording, newSessionIds);
+      recordings.forEach(async (recording) => {
+        // Modify and recompress
+        const { compressed, identifiers } = await this.modifyAndRecompress(
+          recording,
+          newSessionIds,
+          newWindowIds
+        );
 
-      // Calculate base timestamp for events
-      const now = Date.now();
-      const baseTimestamp = this.config.timestampOffset
-        ? now + this.config.timestampOffset
-        : now;
+        // Send session recording to PostHog
+        console.log("🚀 Sending session recording to PostHog...");
+        const recordingResponse = await this.sendToPostHog(compressed);
+        recordingResponses.push(recordingResponse);
 
-      // Load and modify events from the same session
-      const modifiedEventData = await this.loadAndModifyEvents(
-        identifiers.originalSessionId,
-        identifiers.newSessionId,
-        baseTimestamp
-      );
-
-      // Send session recording to PostHog
-      console.log("🚀 Sending session recording to PostHog...");
-      const recordingResponse = await this.sendToPostHog(compressed);
-
-      // Send events to PostHog (if any)
-      let eventsResponses = null;
-      if (modifiedEventData.length > 0) {
-        eventsResponses = await this.sendEventsToPostHog(modifiedEventData);
-
-        // Count successful responses
-        const successfulCount = eventsResponses.filter(
-          (r) => r && !r.error && r.status >= 200 && r.status < 300
-        ).length;
-        const failedCount = eventsResponses.length - successfulCount;
-
-        if (failedCount > 0) {
-          console.log(
-            `⚠️  Events: ${successfulCount} succeeded, ${failedCount} failed`
-          );
-        } else {
-          console.log(`✅ All ${successfulCount} events sent successfully`);
-        }
-      }
-
-      console.log(`\n✅ New session created successfully!`);
-      console.log(`📈 Recording Response: HTTP ${recordingResponse.status}`);
-      console.log(`🔍 Session details:`);
-      console.log(`   Original Session: ${identifiers.originalSessionId}`);
-      console.log(`   New Session:      ${identifiers.newSessionId}`);
-      console.log(
-        `   User ID:          ${identifiers.originalUserId} (same user)`
-      );
-      console.log(`   Events sent:      ${modifiedEventData.length}`);
-      console.log(`   Timestamp:        ${new Date().toLocaleString()}`);
+        console.log(`\n✅ New session created successfully!`);
+        console.log(
+          `📈 Recording Response: HTTP ${recordingResponses
+            .map((r) => r.status)
+            .join(", ")}`
+        );
+        console.log(`🔍 Session details:`);
+        console.log(`   Original Session: ${identifiers.originalSessionId}`);
+        console.log(`   New Session:      ${identifiers.newSessionId}`);
+        console.log(
+          `   User ID:          ${identifiers.originalUserId} (same user)`
+        );
+      });
 
       return {
         success: true,
-        identifiers,
-        recordingResponse,
-        eventsResponses,
-        eventsCount: modifiedEventData.length,
+        recordingResponses,
       };
     } catch (error) {
       console.error("\n❌ Session replay failed:", error.message);

@@ -10,7 +10,7 @@ class PostHogSessionReplay {
       targetHost: config.targetHost || "us.i.posthog.com",
       projectKey: config.projectKey || process.env.POSTHOG_API_KEY,
       ssl: config.ssl !== false,
-      timestampOffset: config.timestampOffset || 86400000, // 24 hours
+      timestampOffset: config.timestampOffset || 3 * 86400000, // 3 days
       ...config,
     };
   }
@@ -237,12 +237,31 @@ class PostHogSessionReplay {
 
     try {
       // send an arry with historical_migration flag
-      const batchJson = JSON.stringify(batchData.batch);
-      const compressed = zlib.gzipSync(Buffer.from(batchJson, "utf8"));
+      const url = "https://us.i.posthog.com/batch/";
 
-      const response = await this.sendToPostHog(compressed, "/e/", true);
-      console.log(`✅ Batch sent successfully\n`);
-      return response;
+      const body = {
+        api_key: process.env.POSTHOG_API_KEY || this.config.projectKey,
+        historical_migration: true,
+        batch: batchData.batch,
+      };
+
+      (async () => {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+
+        const data = await res.text(); // or res.json()
+        console.log(JSON.stringify(body, null, 2));
+        console.log("Status:", res.status);
+        console.log("Response:", data);
+      })();
+
+      // console.log(`✅ Batch sent successfully\n`);
+      // return response;
     } catch (error) {
       console.error(`❌ Failed to send batch: ${error.message}\n`);
       throw error;
@@ -284,7 +303,9 @@ class PostHogSessionReplay {
 
         // get batch timeset and offset
         const batchTimestamp = entry.originalTimestamp
-          ? new Date(entry.originalTimestamp - this.config.timestampOffset).toISOString()
+          ? new Date(
+              entry.originalTimestamp - this.config.timestampOffset
+            ).toISOString()
           : new Date(Date.now() - this.config.timestampOffset).toISOString();
 
         // process each event in batch
@@ -292,7 +313,7 @@ class PostHogSessionReplay {
           const sessionId = event.properties?.$session_id;
           if (sessionId) {
             seenSessionIds.add(sessionId);
-            
+
             // Only process events matching the original session ID
             if (sessionId === originalSessionId) {
               // dupe event
@@ -305,6 +326,13 @@ class PostHogSessionReplay {
 
               // use the batch timestamp (with the offset applied)
               modified.timestamp = batchTimestamp;
+
+              // delete the original timestamp
+              delete modified.uuid;
+              delete modified.offset;
+              modified.event = `replayed_event_${Date.now().toString()}_${
+                modified.event
+              }`;
 
               allModifiedEvents.push(modified);
             }
@@ -340,7 +368,7 @@ class PostHogSessionReplay {
 
       // need batch for histroical imports
       return {
-        // array for batch 
+        // array for batch
         batch: allModifiedEvents,
         historical_migration: true,
       };

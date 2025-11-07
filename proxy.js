@@ -8,9 +8,25 @@ const fs = require("fs");
 const app = express();
 const port = 3001;
 
+// Get recording name from process.argv or fallback to Date.now()
+let recordingId = null;
+const nameArgIndex = process.argv.findIndex(
+  (arg) => arg === "--name" || arg === "-n"
+);
+console.log(nameArgIndex);
+if (nameArgIndex !== -1 && process.argv[nameArgIndex + 1]) {
+  recordingId = process.argv[nameArgIndex + 1];
+} else {
+  recordingId = Date.now();
+}
+
 // Paths to JSONL files
-const EVENTS_FILE = path.join(__dirname, "data", "events.jsonl");
-const RECORDINGS_FILE = path.join(__dirname, "data", "recordings.jsonl");
+const EVENTS_FILE = path.join(__dirname, "data", `${recordingId}-events.jsonl`);
+const RECORDINGS_FILE = path.join(
+  __dirname,
+  "data",
+  `${recordingId}-recordings.jsonl`
+);
 
 // Ensure data directory exists
 const dataDir = path.join(__dirname, "data");
@@ -533,15 +549,6 @@ app.get("*", async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(
-    `🚀 Behavior-Aware PostHog Proxy running on http://localhost:${port}`
-  );
-  console.log(
-    `📦 Static assets: http://localhost:${port}/static/* -> https://us-assets.i.posthog.com/static/*`
-  );
-  console.log(
-    `🎯 API endpoints: http://localhost:${port}/* -> https://us.i.posthog.com/*`
-  );
-  console.log(`🎬 Recording sessions will be saved to JSONL files`);
-  console.log(`🔍 Health check: http://localhost:${port}/health`);
+  console.log(`🚀 PostHog Proxy running on http://localhost:${port}`);
+  console.log(`🔍 Recording ID: ${recordingId}`);
 });

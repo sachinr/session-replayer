@@ -7,9 +7,9 @@ require("dotenv").config();
 class PostHogSessionReplay {
   constructor(config) {
     this.config = {
+      recordingId: config.recordingId,
       targetHost: config.targetHost || "us.i.posthog.com",
       projectKey: config.projectKey || process.env.POSTHOG_API_KEY,
-      ssl: config.ssl !== false,
       timestampOffset: config.timestampOffset || 3 * 86400000, // 3 days
       ...config,
     };
@@ -502,6 +502,9 @@ async function main() {
         case "host":
           config.targetHost = value;
           break;
+        case "recording-id":
+          config.recordingId = value;
+          break;
         case "key":
           config.projectKey = value;
           break;
@@ -515,7 +518,7 @@ async function main() {
   if (!config.projectKey && !process.env.POSTHOG_API_KEY) {
     console.error("❌ Error: PostHog project key required");
     console.log(
-      "Usage: node replay-new-session.js --key YOUR_PROJECT_KEY [options]"
+      "Usage: node replay-new-session.js --key YOUR_PROJECT_KEY --recording-id YOUR_RECORDING_ID [options]"
     );
     console.log("");
     console.log(
@@ -527,19 +530,28 @@ async function main() {
     console.log("");
     console.log("Options:");
     console.log("  --key PROJECT_KEY        PostHog project key (required)");
+    console.log("  --recording-id RECORDING_ID Recording ID (required)");
     console.log(
       "  --timestamp-offset MS    Milliseconds to offset timestamps (negative for past)"
     );
     console.log("");
     console.log("Examples:");
-    console.log("  node replay-new-session.js --key phc_abc123");
     console.log(
-      "  node replay-new-session.js --key phc_abc123 --timestamp-offset -86400000  # Yesterday"
+      "  node replay-new-session.js --key phc_abc123 --recording-id 1234567890"
+    );
+    console.log(
+      "  node replay-new-session.js --key phc_abc123 --recording-id 1234567890 --timestamp-offset -86400000  # Yesterday"
     );
     process.exit(1);
   }
 
-  config.projectKey = config.projectKey || process.env.POSTHOG_PROJECT_KEY;
+  if (!config.recordingId) {
+    console.error("❌ Error: Recording ID required");
+    console.log(
+      "Usage: node replay-new-session.js --recording-id YOUR_RECORDING_ID"
+    );
+    process.exit(1);
+  }
 
   const replay = new PostHogSessionReplay(config);
   await replay.replaySession();

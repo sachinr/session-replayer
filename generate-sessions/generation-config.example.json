@@ -1,0 +1,38 @@
+{
+  "start_date": "2025-01-01",
+  "end_date": "2025-02-01",
+  "starting_user_count": 100,
+  "dau_percentage": 0.1,
+  "daily_signups_growth": 0.02,
+  "personas": [
+    {
+      "name": "Persona 1",
+      "user_share": 0.5,
+      "churn_rate": 0.1,
+      "sessions": [
+        {
+          "id": "recording-1"
+        },
+        {
+          "id": "recording-2"
+        },
+        {
+          "id": "recording-3"
+        }
+      ]
+    },
+    {
+      "name": "Persona 2",
+      "user_share": 0.5,
+      "churn_rate": 0.05,
+      "sessions": [
+        {
+          "id": "recording-4"
+        },
+        {
+          "id": "recording-5"
+        }
+      ]
+    }
+  ]
+}

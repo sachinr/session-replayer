@@ -1,29 +1,27 @@
-const fs = require("fs").promises;
-const https = require("https");
-const zlib = require("zlib");
+import fs from "fs/promises";
+import https from "https";
+import zlib from "zlib";
+import dotenv from "dotenv";
+import path, { dirname } from "path";
+import { fileURLToPath } from "url";
 
-require("dotenv").config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+dotenv.config();
 
 class PostHogSessionReplay {
   constructor(config) {
     this.config = {
+      recordingId: config.recordingId,
       targetHost: config.targetHost || "us.i.posthog.com",
       projectKey: config.projectKey || process.env.POSTHOG_API_KEY,
-      timestampOffset: config.timestampOffset || 3 * 86400000, // 3 days
+      timestamp: config.timestamp,
+      sessionId: config.sessionId,
+      userId: config.userId,
+      anonId: crypto.randomUUID(),
       ...config,
     };
-  }
-
-  // Generate new UUID for session (keeping original user ID)
-  generateNewUUID() {
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
-      /[xy]/g,
-      function (c) {
-        const r = (Math.random() * 16) | 0;
-        const v = c === "x" ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
-      }
-    );
   }
 
   // Fix undefined attributes in DOM nodes to prevent PostHog UI errors
@@ -93,12 +91,15 @@ class PostHogSessionReplay {
     const originalUserId = originalEvent?.properties?.distinct_id;
     const originalSessionId = originalEvent?.properties?.$session_id;
     const originalWindowId = originalEvent?.properties?.$window_id;
+    const originalTimestamp =
+      originalRecording?.decompressed[0]?.properties?.$snapshot_data[0]
+        ?.timestamp;
 
     if (!newSessionIdMap.has(originalSessionId)) {
-      newSessionIdMap.set(originalSessionId, this.generateNewUUID());
+      newSessionIdMap.set(originalSessionId, this.config.sessionId);
     }
     if (!newWindowIdMap.has(originalWindowId)) {
-      newWindowIdMap.set(originalWindowId, this.generateNewUUID());
+      newWindowIdMap.set(originalWindowId, crypto.randomUUID());
     }
     const newSessionId = newSessionIdMap.get(originalSessionId);
     const newWindowId = newWindowIdMap.get(originalWindowId);
@@ -109,58 +110,52 @@ class PostHogSessionReplay {
     console.log(`   User ID:          ${originalUserId} (preserved)`);
 
     // Clone and modify the decompressed data
-    const modifiedEvents = JSON.parse(
-      JSON.stringify(originalRecording.decompressed)
-    );
+    const chunks = JSON.parse(JSON.stringify(originalRecording.decompressed));
 
     // Fix potential undefined attributes in DOM nodes to prevent PostHog UI errors
-    this.ensureDOMAttributesExist(modifiedEvents);
+    this.ensureDOMAttributesExist(chunks);
 
     // Re-compress nested DOM snapshots that were originally compressed
-    this.recompressNestedSnapshots(modifiedEvents);
+    this.recompressNestedSnapshots(chunks);
 
-    // Calculate base timestamp (default to now, or specified offset)
-    const now = Date.now();
-    const baseTimestamp = this.config.timestampOffset
-      ? now + this.config.timestampOffset
-      : now;
-
-    modifiedEvents.forEach((event, eventIndex) => {
-      if (event.properties) {
+    chunks.forEach((chunk) => {
+      if (chunk.properties) {
         // Update session identifiers (but keep original user ID)
-        if (event.properties.$session_id) {
-          event.properties.$session_id = newSessionId;
+        if (chunk.properties.$session_id) {
+          chunk.properties.$session_id = newSessionId;
         }
-        if (event.properties.$window_id) {
-          event.properties.$window_id = newWindowId;
+        if (chunk.properties.$window_id) {
+          chunk.properties.$window_id = newWindowId;
         }
-        // Keep original distinct_id unchanged
-
-        // Update event timestamp
-        event.timestamp = event.timestamp - this.config.timestampOffset;
+        if (chunk.properties.$is_identified) {
+          chunk.properties.distinct_id = this.config.userId;
+        } else {
+          chunk.properties.distinct_id = this.config.anonId;
+        }
 
         // Update snapshot timestamps if present
         if (
-          event.properties.$snapshot_data &&
-          Array.isArray(event.properties.$snapshot_data)
+          chunk.properties.$snapshot_data &&
+          Array.isArray(chunk.properties.$snapshot_data)
         ) {
-          event.properties.$snapshot_data.forEach((snapshot, snapshotIndex) => {
-            snapshot.timestamp =
-              snapshot.timestamp - this.config.timestampOffset;
+          chunk.properties.$snapshot_data.forEach((snapshot) => {
+            const offset = snapshot.timestamp - originalTimestamp;
+            console.log(`🔍 Snapshot offset: ${offset}`);
+            snapshot.timestamp = this.config.timestamp + offset;
           });
         }
       }
     });
 
-    console.log(`✅ Modified ${modifiedEvents.length} events`);
+    console.log(`✅ Modified ${chunks.length} chunks`);
 
     // Recompress the modified data (Node.js zlib is closer to original than gzip-js)
-    const modifiedJson = JSON.stringify(modifiedEvents);
+    const modifiedJson = JSON.stringify(chunks);
     const compressed = zlib.gzipSync(Buffer.from(modifiedJson, "utf8"));
 
     return {
       compressed,
-      modifiedEvents,
+      chunks,
       identifiers: {
         newSessionId,
         newWindowId,
@@ -170,7 +165,12 @@ class PostHogSessionReplay {
     };
   }
 
-  async sendToPostHog(compressedData, endpoint = "/s/", verbose = true) {
+  async sendToPostHog({
+    compressedData,
+    endpoint = "/s/",
+    verbose = true,
+    dryRun = true,
+  } = {}) {
     const queryParams = new URLSearchParams({
       ip: "0",
       _: Date.now().toString(),
@@ -194,6 +194,13 @@ class PostHogSessionReplay {
         Referer: "http://localhost:3000/",
       },
     };
+
+    if (dryRun) {
+      console.log(
+        `📊 Dry run: Skipping sending session recording to PostHog...\n`
+      );
+      return;
+    }
 
     return new Promise((resolve, reject) => {
       const req = https.request(options, (res) => {
@@ -226,12 +233,20 @@ class PostHogSessionReplay {
     });
   }
 
-  async sendEventsToPostHog(batchData) {
+  async sendEventsToPostHog({ batchData, dryRun = true } = {}) {
     if (!batchData || !batchData.batch || batchData.batch.length === 0) {
       return null;
     }
 
     const eventCount = batchData.batch.length;
+
+    if (dryRun) {
+      console.log(
+        `📊 Dry run: Skipping sending batch of ${eventCount} events to PostHog...\n`
+      );
+      return;
+    }
+
     console.log(`📊 Sending batch of ${eventCount} events to PostHog...\n`);
 
     try {
@@ -254,7 +269,7 @@ class PostHogSessionReplay {
         });
 
         const data = await res.text(); // or res.json()
-        console.log(JSON.stringify(body, null, 2));
+        console.log(`📊 Batch sent successfully\n`);
         console.log("Status:", res.status);
         console.log("Response:", data);
       })();
@@ -270,7 +285,14 @@ class PostHogSessionReplay {
   async loadAndModifyEvents(originalSessionId, newSessionId) {
     try {
       // Load events
-      const eventsData = await fs.readFile("./data/events.jsonl", "utf8");
+      const eventsData = await fs.readFile(
+        path.join(
+          __dirname,
+          "../data",
+          `${this.config.recordingId}-events.jsonl`
+        ),
+        "utf8"
+      );
       const eventEntries = eventsData
         .trim()
         .split("\n")
@@ -301,11 +323,7 @@ class PostHogSessionReplay {
         }
 
         // get batch timeset and offset
-        const batchTimestamp = entry.originalTimestamp
-          ? new Date(
-              entry.originalTimestamp - this.config.timestampOffset
-            ).toISOString()
-          : new Date(Date.now() - this.config.timestampOffset).toISOString();
+        const batchTimestamp = new Date(this.config.timestamp).toISOString();
 
         // process each event in batch
         for (const event of eventData) {
@@ -329,9 +347,8 @@ class PostHogSessionReplay {
               // delete the original timestamp
               delete modified.uuid;
               delete modified.offset;
-              modified.event = `replayed_event_${Date.now().toString()}_${
-                modified.event
-              }`;
+              modified.properties.$lib = "posthog-session-replay";
+              modified.properties.$lib_version = `${new Date().toISOString()}`;
 
               allModifiedEvents.push(modified);
             }
@@ -411,13 +428,17 @@ class PostHogSessionReplay {
     });
   }
 
-  async replaySession() {
+  async replaySession({ dryRun = true } = {}) {
     console.log("🎬 Creating new session from captured recording...\n");
 
     try {
       // Load recordings
       const recordingsData = await fs.readFile(
-        "./data/recordings.jsonl",
+        path.join(
+          __dirname,
+          "../data",
+          `${this.config.recordingId}-recordings.jsonl`
+        ),
         "utf8"
       );
       const recordings = recordingsData
@@ -445,15 +466,18 @@ class PostHogSessionReplay {
 
         // Send session recording to PostHog
         console.log("🚀 Sending session recording to PostHog...");
-        const recordingResponse = await this.sendToPostHog(compressed);
+        const recordingResponse = await this.sendToPostHog({
+          compressedData: compressed,
+          dryRun,
+        });
         recordingResponses.push(recordingResponse);
 
         console.log(`\n✅ New session created successfully!`);
-        console.log(
-          `📈 Recording Response: HTTP ${recordingResponses
-            .map((r) => r.status)
-            .join(", ")}`
-        );
+        // console.log(
+        //   `📈 Recording Response: HTTP ${recordingResponses
+        //     .map((r) => r?.status || "N/A")
+        //     .join(", ")}`
+        // );
         console.log(`🔍 Session details:`);
         console.log(`   Original Session: ${identifiers.originalSessionId}`);
         console.log(`   New Session:      ${identifiers.newSessionId}`);
@@ -471,7 +495,7 @@ class PostHogSessionReplay {
 
         // Send batch if events were found
         if (batchData) {
-          await this.sendEventsToPostHog(batchData);
+          await this.sendEventsToPostHog({ batchData, dryRun });
         }
       });
 
@@ -486,67 +510,4 @@ class PostHogSessionReplay {
   }
 }
 
-// CLI interface
-async function main() {
-  const args = process.argv.slice(2);
-  const config = {};
-
-  // Parse command line arguments
-  for (let i = 0; i < args.length; i += 2) {
-    const key = args[i]?.replace("--", "");
-    const value = args[i + 1];
-
-    if (key && value) {
-      switch (key) {
-        case "host":
-          config.targetHost = value;
-          break;
-        case "key":
-          config.projectKey = value;
-          break;
-        case "timestamp-offset":
-          config.timestampOffset = parseInt(value);
-          break;
-      }
-    }
-  }
-
-  if (!config.projectKey && !process.env.POSTHOG_API_KEY) {
-    console.error("❌ Error: PostHog project key required");
-    console.log(
-      "Usage: node replay-new-session.js --key YOUR_PROJECT_KEY --recording-id YOUR_RECORDING_ID [options]"
-    );
-    console.log("");
-    console.log(
-      "This script creates a new session for the same user from captured recordings."
-    );
-    console.log(
-      "It preserves the original user ID but generates a new session UUID."
-    );
-    console.log("");
-    console.log("Options:");
-    console.log("  --key PROJECT_KEY        PostHog project key (required)");
-    console.log("  --recording-id RECORDING_ID Recording ID (required)");
-    console.log(
-      "  --timestamp-offset MS    Milliseconds to offset timestamps (negative for past)"
-    );
-    console.log("");
-    console.log("Examples:");
-    console.log(
-      "  node replay-new-session.js --key phc_abc123 --recording-id 1234567890"
-    );
-    console.log(
-      "  node replay-new-session.js --key phc_abc123 --recording-id 1234567890 --timestamp-offset -86400000  # Yesterday"
-    );
-    process.exit(1);
-  }
-
-  const replay = new PostHogSessionReplay(config);
-  await replay.replaySession();
-}
-
-if (require.main === module) {
-  main().catch(console.error);
-}
-
-module.exports = PostHogSessionReplay;
+export default PostHogSessionReplay;

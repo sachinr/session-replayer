@@ -37,7 +37,6 @@ const getWeekdayOrWeekendDAU = (date, dau) => {
 
 const dailySignups = async (currentTotalUsers) => {
     // Add new users with variance: positive swings can be large, negative small
-    // Negative variance up to -5%, positive up to +30%
     const variance = (Math.random() < 0.7) ? Math.random() * 0.005 : -(Math.random() * 0.01);
     const signupCount = Math.ceil(currentTotalUsers * (config.daily_signups_growth + variance));
     console.log(`Signups for the day (with variance): ${signupCount}`);
@@ -57,22 +56,30 @@ const replaySession = async (recordingId, userId, sessionId, timestamp, dryRun) 
 }
 
 const run = async ({ dryRun = true } = {}) => {
+  // generate initial users
   const users = await generateUsers(config.starting_user_count);
   const startDate = new Date(config.start_date);
   const endDate = new Date(config.end_date);
+  // calculate initial DAU (% of total users)
   let dau = config.starting_user_count * config.dau_percentage;
 
-  // generate sessions for each day
+  // generate sessions for each day 
   for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+    // count of users for the day - max is weekday/weekend DAU limit 
     let dailyUserCount = 0;
     const dauLimit = getWeekdayOrWeekendDAU(d, dau);
 
     while (dailyUserCount < dauLimit) {
+      // select a random user
       const user = users[Math.floor(Math.random() * users.length)];
+      // if the user is not churned, generate sessions
       if (!user.churned) {
+        // find the user's persona details
         const persona = config.personas.find(p => p.name === user.persona);
+        // a single visit could combine one or more recordings
         const sessionsToGenerate = Math.ceil(Math.random() * persona.sessions.length);
 
+        // if the user hasn't , or the persona has only one recording, start with the first recording (usually signup or signin)
         const firstSessionIndex = user.session_count === 0 || persona.sessions.length === 1 ? 0 : 1
 
         for(let i = firstSessionIndex; i < Math.min(persona.sessions.length, sessionsToGenerate); i++) {
@@ -95,7 +102,9 @@ const run = async ({ dryRun = true } = {}) => {
       await Promise.resolve();
     }
 
+    // add new users for the day
     users.push(...(await dailySignups(users.length)));
+    // calculate new DAU (% of total users)
     dau = Math.ceil(users.filter(u => !u.churned).length * config.dau_percentage);
 
     console.log(`Total active users: ${users.filter(u => !u.churned).length}`);

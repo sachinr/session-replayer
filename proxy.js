@@ -388,7 +388,7 @@ app.post("/flags/*", async (req, res) => {
 });
 
 // Handle PostHog events endpoint
-app.post("/i/v0/e/*", async (req, res) => {
+app.post(["/i/v0/e/*", "/e/*"], async (req, res) => {
   console.log(`📊 PostHog Event: ${req.path}`);
   console.log(`📊 Content-Type: ${req.headers["content-type"]}`);
   console.log(`📊 Content-Encoding: ${req.headers["content-encoding"]}`);

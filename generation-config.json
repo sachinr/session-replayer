@@ -1,0 +1,45 @@
+{
+  "start_date": "2025-10-03",
+  "end_date": "2025-11-08",
+  "starting_user_count": 100,
+  "dau_percentage": 0.1,
+  "daily_signups_growth": 0.02,
+  "personas": [
+    {
+      "name": "Browser",
+      "user_share": 0.5,
+      "churn_rate": 0.3,
+      "sessions": [
+        {
+          "id": "browse"
+        }
+      ]
+    },
+    {
+      "name": "New user",
+      "user_share": 0.2,
+      "churn_rate": 0.05,
+      "sessions": [
+        {
+          "id": "browse-and-signup"
+        },
+        {
+          "id": "send-message"
+        }
+      ]
+    },
+    {
+      "name": "Returning user",
+      "user_share": 0.3,
+      "churn_rate": 0.05,
+      "sessions": [
+        {
+          "id": "signin"
+        },
+        {
+          "id": "send-message"
+        }
+      ]
+    }
+  ]
+}

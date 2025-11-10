@@ -335,6 +335,11 @@ class PostHogSessionReplay {
               // use new sesh id
               if (modified.properties && modified.properties.$session_id) {
                 modified.properties.$session_id = newSessionId;
+                if (modified.properties.$is_identified) {
+                  modified.properties.distinct_id = this.config.userId;
+                } else {
+                  modified.properties.distinct_id = this.config.anonId;
+                }
               }
 
               // use the batch timestamp (with the offset applied)

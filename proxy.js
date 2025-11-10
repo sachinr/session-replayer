@@ -1,9 +1,13 @@
-const express = require("express");
-const cors = require("cors");
-const path = require("path");
-const https = require("https");
-const zlib = require("zlib");
-const fs = require("fs");
+import express from "express";
+import cors from "cors";
+import https from "https";
+import zlib from "zlib";
+import fs from "fs";
+import path, { dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const app = express();
 const port = 3001;
@@ -404,7 +408,7 @@ app.post("/flags/*", async (req, res) => {
 });
 
 // Handle PostHog events endpoint
-app.post("/i/v0/e/*", async (req, res) => {
+app.post(["/i/v0/e/*", "/e/*"], async (req, res) => {
   console.log(`📊 PostHog Event: ${req.path}`);
   console.log(`📊 Content-Type: ${req.headers["content-type"]}`);
   console.log(`📊 Content-Encoding: ${req.headers["content-encoding"]}`);

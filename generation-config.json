@@ -1,7 +1,7 @@
 {
-  "start_date": "2025-11-03",
-  "end_date": "2025-11-05",
-  "starting_user_count": 20,
+  "start_date": "2025-10-03",
+  "end_date": "2025-11-08",
+  "starting_user_count": 100,
   "dau_percentage": 0.1,
   "daily_signups_growth": 0.02,
   "personas": [

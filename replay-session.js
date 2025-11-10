@@ -286,11 +286,7 @@ class PostHogSessionReplay {
     try {
       // Load events
       const eventsData = await fs.readFile(
-        path.join(
-          __dirname,
-          "../data",
-          `${this.config.recordingId}-events.jsonl`
-        ),
+        path.join(__dirname, "data", `${this.config.recordingId}-events.jsonl`),
         "utf8"
       );
       const eventEntries = eventsData
@@ -436,7 +432,7 @@ class PostHogSessionReplay {
       const recordingsData = await fs.readFile(
         path.join(
           __dirname,
-          "../data",
+          "data",
           `${this.config.recordingId}-recordings.jsonl`
         ),
         "utf8"
@@ -487,7 +483,8 @@ class PostHogSessionReplay {
       });
 
       // Find and modify events for this session
-      newSessionIds.forEach(async (newSessionId, originalSessionId) => {
+
+      for (const [originalSessionId, newSessionId] of newSessionIds.entries()) {
         const batchData = await this.loadAndModifyEvents(
           originalSessionId,
           newSessionId
@@ -497,7 +494,7 @@ class PostHogSessionReplay {
         if (batchData) {
           await this.sendEventsToPostHog({ batchData, dryRun });
         }
-      });
+      }
 
       return {
         success: true,

@@ -104,10 +104,10 @@ class PostHogSessionReplay {
     const newSessionId = newSessionIdMap.get(originalSessionId);
     const newWindowId = newWindowIdMap.get(originalWindowId);
 
-    console.log(`📝 Session modification:`);
-    console.log(`   Original session: ${originalSessionId}`);
-    console.log(`   New session:      ${newSessionId}`);
-    console.log(`   User ID:          ${originalUserId} (preserved)`);
+    // console.log(`📝 Session modification:`);
+    // console.log(`   Original session: ${originalSessionId}`);
+    // console.log(`   New session:      ${newSessionId}`);
+    // console.log(`   User ID:          ${originalUserId} (preserved)`);
 
     // Clone and modify the decompressed data
     const chunks = JSON.parse(JSON.stringify(originalRecording.decompressed));
@@ -139,9 +139,8 @@ class PostHogSessionReplay {
           Array.isArray(chunk.properties.$snapshot_data)
         ) {
           chunk.properties.$snapshot_data.forEach((snapshot) => {
-            const offset = snapshot.timestamp - originalTimestamp;
-            console.log(`🔍 Snapshot offset: ${offset}`);
-            snapshot.timestamp = this.config.timestamp + offset;
+            // const offset = snapshot.timestamp - originalTimestamp;
+            snapshot.timestamp = snapshot.timestamp - 86400000;
           });
         }
       }
@@ -173,7 +172,7 @@ class PostHogSessionReplay {
   } = {}) {
     const queryParams = new URLSearchParams({
       ip: "0",
-      _: Date.now().toString(),
+      _: this.config.timestamp.toString(),
       ver: "1.265.0",
       compression: "gzip-js",
       // Note: Original PostHog requests do NOT include token or beacon parameters
@@ -285,9 +284,13 @@ class PostHogSessionReplay {
   async loadAndModifyEvents(originalSessionId, newSessionId) {
     try {
       // Load events
-      const eventsData = await fs.readFile(
+      let eventsData = await fs.readFile(
         path.join(__dirname, "data", `${this.config.recordingId}-events.jsonl`),
         "utf8"
+      );
+      eventsData = eventsData.replaceAll(
+        /phc_[a-zA-Z0-9]+/g,
+        this.config.projectKey
       );
       const eventEntries = eventsData
         .trim()
@@ -314,8 +317,12 @@ class PostHogSessionReplay {
         let eventData = entry.data;
 
         // Skip empty entries
-        if (!eventData || !Array.isArray(eventData)) {
+        if (!eventData) {
           continue;
+        }
+
+        if (!Array.isArray(eventData)) {
+          eventData = [eventData];
         }
 
         // get batch timeset and offset
@@ -457,13 +464,30 @@ class PostHogSessionReplay {
       const newWindowIds = new Map();
       const recordingResponses = [];
 
-      recordings.forEach(async (recording) => {
+      for await (const recording of recordings) {
         // Modify and recompress
         const { compressed, identifiers } = await this.modifyAndRecompress(
           recording,
           newSessionIds,
           newWindowIds
         );
+
+        // Find and modify events for this session
+
+        for await (const [
+          originalSessionId,
+          newSessionId,
+        ] of newSessionIds.entries()) {
+          const batchData = await this.loadAndModifyEvents(
+            originalSessionId,
+            newSessionId
+          );
+
+          // Send batch if events were found
+          if (batchData) {
+            await this.sendEventsToPostHog({ batchData, dryRun });
+          }
+        }
 
         // Send session recording to PostHog
         console.log("🚀 Sending session recording to PostHog...");
@@ -474,31 +498,17 @@ class PostHogSessionReplay {
         recordingResponses.push(recordingResponse);
 
         console.log(`\n✅ New session created successfully!`);
-        // console.log(
-        //   `📈 Recording Response: HTTP ${recordingResponses
-        //     .map((r) => r?.status || "N/A")
-        //     .join(", ")}`
-        // );
+        console.log(
+          `📈 Recording Response: HTTP ${recordingResponses
+            .map((r) => r?.status || "N/A")
+            .join(", ")}`
+        );
         console.log(`🔍 Session details:`);
         console.log(`   Original Session: ${identifiers.originalSessionId}`);
         console.log(`   New Session:      ${identifiers.newSessionId}`);
         console.log(
           `   User ID:          ${identifiers.originalUserId} (same user)`
         );
-      });
-
-      // Find and modify events for this session
-
-      for (const [originalSessionId, newSessionId] of newSessionIds.entries()) {
-        const batchData = await this.loadAndModifyEvents(
-          originalSessionId,
-          newSessionId
-        );
-
-        // Send batch if events were found
-        if (batchData) {
-          await this.sendEventsToPostHog({ batchData, dryRun });
-        }
       }
 
       return {

@@ -473,23 +473,6 @@ class PostHogSessionReplay {
           newWindowIds
         );
 
-        // Find and modify events for this session
-
-        for await (const [
-          originalSessionId,
-          newSessionId,
-        ] of newSessionIds.entries()) {
-          const batchData = await this.loadAndModifyEvents(
-            originalSessionId,
-            newSessionId
-          );
-
-          // Send batch if events were found
-          if (batchData) {
-            await this.sendEventsToPostHog({ batchData, dryRun });
-          }
-        }
-
         // Send session recording to PostHog
         // console.log("🚀 Sending session recording to PostHog...");
         const recordingResponse = await this.sendToPostHog({
@@ -507,7 +490,25 @@ class PostHogSessionReplay {
         // console.log(`🔍 Session details:`);
         // console.log(`   Original Session: ${identifiers.originalSessionId}`);
         // console.log(`   New Session:      ${identifiers.newSessionId}`);
+      }
+
+
+        // Find and modify events for this session
+
+      for await (const [
+        originalSessionId,
+        newSessionId,
+      ] of newSessionIds.entries()) {
+        const batchData = await this.loadAndModifyEvents(
+          originalSessionId,
+          newSessionId
         );
+
+        // Send batch if events were found
+        if (batchData) {
+          console.log('sending')
+          await this.sendEventsToPostHog({ batchData, dryRun });
+        }
       }
 
       return {

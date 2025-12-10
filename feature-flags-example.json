@@ -1,0 +1,29 @@
+{
+  "flags": [
+    {
+      "key": "pricing-test",
+      "type": "experiment",
+      "active": true,
+      "description": "Pricing page experiment",
+      "variants": [
+        {
+          "name": "control",
+          "rollout_percentage": 50,
+          "conversion_rate": 0.12,
+          "conversion_variance": 0.02
+        },
+        {
+          "name": "new-pricing",
+          "rollout_percentage": 50,
+          "conversion_rate": 0.14,
+          "conversion_variance": 0.02
+        }
+      ],
+      "conversion_events": ["signup_completed"],
+      "metrics": {
+        "type": "trend",
+        "event_name": "signup_completed"
+      }
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import zlib from "zlib";
 import dotenv from "dotenv";
 import path, { dirname } from "path";
 import { fileURLToPath } from "url";
+import FeatureFlagManager from "./feature-flag-manager.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -22,6 +23,8 @@ class PostHogSessionReplay {
       anonId: crypto.randomUUID(),
       ...config,
     };
+    this.flagManager = new FeatureFlagManager();
+    this.flagAssignments = null;
   }
 
   // Fix undefined attributes in DOM nodes to prevent PostHog UI errors
@@ -309,7 +312,7 @@ class PostHogSessionReplay {
       console.log(`📊 Total event entries in file: ${eventEntries.length}`);
 
       // Collect all events from all batches that match the session
-      const allModifiedEvents = [];
+      let allModifiedEvents = [];
       const seenSessionIds = new Set();
 
       // each line in events.jsonl
@@ -358,6 +361,11 @@ class PostHogSessionReplay {
               modified.properties.$lib = "posthog-session-replay";
               modified.properties.$lib_version = `${new Date().toISOString()}`;
 
+              // add flag properties if flags are assigned
+              if (this.flagAssignments && Object.keys(this.flagAssignments).length > 0) {
+                this.flagManager.injectFlagProperties(modified, this.flagAssignments);
+              }
+
               allModifiedEvents.push(modified);
             }
           }
@@ -384,6 +392,37 @@ class PostHogSessionReplay {
           `⚠️  No events found matching session ${originalSessionId}`
         );
         return null;
+      }
+
+      // add exposure and conversion events if flags are assigned (for experiments)
+      if (this.flagAssignments && Object.keys(this.flagAssignments).length > 0) {
+        const exposureEvents = this.flagManager.createExposureEvents(
+          this.flagAssignments,
+          this.config.userId,
+          newSessionId,
+          this.config.timestamp
+        );
+
+        const conversions = this.flagManager.determineConversions(
+          this.flagAssignments,
+          this.config.userId,
+          newSessionId
+        );
+
+        const conversionEvents = this.flagManager.createConversionEvents(
+          conversions,
+          this.flagAssignments,
+          this.config.userId,
+          newSessionId,
+          this.config.timestamp
+        );
+
+        console.log(
+          `✅ Added ${exposureEvents.length} exposure events and ${conversionEvents.length} conversion events`
+        );
+
+        // insert exposure events at beginning, conversion events at end
+        allModifiedEvents = [...exposureEvents, ...allModifiedEvents, ...conversionEvents];
       }
 
       console.log(
@@ -438,6 +477,18 @@ class PostHogSessionReplay {
 
   async replaySession({ dryRun = true } = {}) {
     console.log("🎬 Creating new session from captured recording...\n");
+
+    // Load flags and assign to this user
+    try {
+      await this.flagManager.loadConfig();
+      this.flagAssignments = this.flagManager.assignFlags(this.config.userId);
+      if (this.flagAssignments && Object.keys(this.flagAssignments).length > 0) {
+        console.log(`✅ Assigned ${Object.keys(this.flagAssignments).length} feature flags to user ${this.config.userId}`);
+      }
+    } catch (error) {
+      console.log(`⚠️  No feature flags configured or error loading: ${error.message}`);
+      this.flagAssignments = null;
+    }
 
     try {
       // Load recordings

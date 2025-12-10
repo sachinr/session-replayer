@@ -4,6 +4,7 @@ import zlib from "zlib";
 import dotenv from "dotenv";
 import path, { dirname } from "path";
 import { fileURLToPath } from "url";
+import generationConfig from "./generation-config.json" with { type: "json" };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -12,6 +13,13 @@ dotenv.config();
 
 class PostHogSessionReplay {
   constructor(config) {
+
+    this.propertiesToRandomize = new Map();
+
+    Object.keys(generationConfig.randomized_ids).forEach((id) => {
+      this.propertiesToRandomize.set(id, generationConfig.randomized_ids[id] === "uuid" ? crypto.randomUUID() : Math.floor(Math.random() * 10000));
+    })
+
     this.config = {
       recordingId: config.recordingId,
       targetHost: config.targetHost || "us.i.posthog.com",
@@ -359,7 +367,22 @@ class PostHogSessionReplay {
               modified.properties.$lib = "posthog-session-replay";
               modified.properties.run_id = this.config.runId;
 
-              allModifiedEvents.push(modified);
+              // within the context of a session 
+              // replace all instances of a property with a randomized value
+              // keep track of the value for the rest of the session
+              this.propertiesToRandomize.keys().forEach((propertyToRandomize) => {
+                if(modified.properties[propertyToRandomize]) {
+                  const originalValue = modified.properties[propertyToRandomize];
+
+                  modified.properties[propertyToRandomize] = this.propertiesToRandomize.get(propertyToRandomize);
+                  modified.properties['$current_url'] = modified.properties['$current_url']?.replace(originalValue, this.propertiesToRandomize.get(propertyToRandomize));
+                  modified.properties['$path_name'] = modified.properties['$path_name']?.replace(originalValue, this.propertiesToRandomize.get(propertyToRandomize));
+                }
+              });
+
+              if(modified.event !== "$identify") {
+                allModifiedEvents.push(modified);
+              }
             }
           }
         }

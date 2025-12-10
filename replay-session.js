@@ -483,26 +483,45 @@ class PostHogSessionReplay {
     events.forEach((event) => {
       if (event.properties && event.properties.$snapshot_data) {
         event.properties.$snapshot_data.forEach((snapshot) => {
+          // Recompress type 2 DOM snapshots that we decompressed
           if (
             snapshot.type === 2 &&
             snapshot._original_compressed &&
             typeof snapshot.data === "string"
           ) {
             try {
-              // Re-compress the DOM data back to its original gzipped latin1 format
               const buffer = zlib.gzipSync(Buffer.from(snapshot.data, "utf8"));
               snapshot.data = buffer.toString("latin1");
-              // Remove the flag since we've restored original format
-              delete snapshot._original_compressed;
-              // console.log(
-              //   `🔄 Re-compressed DOM snapshot back to original format`
-              // );
             } catch (error) {
-              // console.warn(
-              //   "Failed to re-compress DOM snapshot:",
-              //   error.message
-              // );
+              // Ignore; leave as-is if recompression fails
             }
+          }
+
+          // Recompress type 3 incremental snapshots whose gzip strings we expanded
+          if (
+            snapshot.type === 3 &&
+            snapshot._original_compressed &&
+            snapshot.data &&
+            typeof snapshot.data === "object"
+          ) {
+            const compressableKeys = ["texts", "attributes", "removes", "adds"];
+            compressableKeys.forEach((key) => {
+              if (typeof snapshot.data[key] === "string") {
+                try {
+                  const buffer = zlib.gzipSync(
+                    Buffer.from(snapshot.data[key], "utf8")
+                  );
+                  snapshot.data[key] = buffer.toString("latin1");
+                } catch (error) {
+                  // Ignore per-key failures
+                }
+              }
+            });
+          }
+
+          // Clear flag once we've attempted recompression
+          if (snapshot._original_compressed) {
+            delete snapshot._original_compressed;
           }
         });
       }

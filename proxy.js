@@ -89,6 +89,18 @@ app.use((req, res, next) => {
   });
 });
 
+// Helper function to try gunzip on strings that look gzip-encoded
+function maybeGunzipString(str) {
+  if (typeof str !== "string" || str.length < 2) return str;
+  if (str.charCodeAt(0) !== 31 || str.charCodeAt(1) !== 139) return str; // gzip magic
+  try {
+    const buffer = Buffer.from(str, "latin1");
+    return zlib.gunzipSync(buffer).toString("utf8");
+  } catch (err) {
+    return str;
+  }
+}
+
 // Helper function to decompress nested DOM snapshots
 async function decompressNestedSnapshots(data) {
   try {
@@ -139,6 +151,41 @@ async function decompressNestedSnapshots(data) {
                 };
               }
             }
+
+            // Type 3 incremental snapshots may embed gzip strings in fields
+            if (
+              snapshot.type === 3 &&
+              snapshot.data &&
+              typeof snapshot.data === "object"
+            ) {
+              const decompressableKeys = [
+                "texts",
+                "attributes",
+                "removes",
+                "adds",
+              ];
+              const newData = { ...snapshot.data };
+              let changed = false;
+
+              decompressableKeys.forEach((key) => {
+                if (typeof newData[key] === "string") {
+                  const decompressed = maybeGunzipString(newData[key]);
+                  if (decompressed !== newData[key]) {
+                    newData[key] = decompressed;
+                    changed = true;
+                  }
+                }
+              });
+
+              if (changed) {
+                return {
+                  ...snapshot,
+                  data: newData,
+                  _original_compressed: true,
+                };
+              }
+            }
+
             return snapshot;
           })
         );

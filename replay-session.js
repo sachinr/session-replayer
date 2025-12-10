@@ -27,8 +27,9 @@ class PostHogSessionReplay {
       projectKey: config.projectKey || process.env.POSTHOG_API_KEY,
       timestamp: config.timestamp,
       sessionId: config.sessionId,
-      userId: config.userId,
+      userId: config.user.id,
       anonId: crypto.randomUUID(),
+      groups: config.user.groups,
       runId: config.runId,
       ...config,
     };
@@ -354,25 +355,23 @@ class PostHogSessionReplay {
               const modified = JSON.parse(JSON.stringify(event));
 
               // use new sesh id
-              if (modified.properties && modified.properties.$session_id) {
-                modified.properties.$session_id = newSessionId;
-                if (modified.properties.$is_identified) {
-                  modified.properties.distinct_id = this.config.userId;
-                  modified.properties.$user_id = this.config.userId;
-                } else {
-                  modified.properties.distinct_id = this.config.anonId;
-                  modified.properties.$user_id = this.config.anonId;
-                }
+              modified.properties.$session_id = newSessionId;
+              if (modified.properties.$is_identified) {
+                modified.properties.distinct_id = this.config.userId;
+                modified.properties.$user_id = this.config.userId;
+              } else {
+                modified.properties.distinct_id = this.config.anonId;
+                modified.properties.$user_id = this.config.anonId;
               }
 
               // use the batch timestamp (with the offset applied)
               modified.timestamp = batchTimestamp;
 
-              // delete the original timestamp
-              delete modified.uuid;
-              delete modified.offset;
               modified.properties.$lib = "posthog-session-replay";
               modified.properties.run_id = this.config.runId;
+
+              delete modified.uuid;
+              delete modified.offset;
 
               // add flag properties if flags are assigned
               if (this.flagAssignments && Object.keys(this.flagAssignments).length > 0) {
@@ -391,6 +390,21 @@ class PostHogSessionReplay {
                   modified.properties['$path_name'] = modified.properties['$path_name']?.replace(originalValue, this.propertiesToRandomize.get(propertyToRandomize));
                 }
               });
+
+              if(modified.event === "$groupidentify" && this.config.groups[modified.properties.$group_type]) {
+                modified.properties.$group_key = this.config.groups[modified.properties.$group_type]
+                modified.properties.$group_set = {
+                  name: this.config.groups[modified.properties.$group_type]
+                }
+              } else {
+                if(modified.properties.$groups) {
+                  Object.keys(modified.properties.$groups).forEach((group) => {
+                    modified.properties.$groups[group] = this.config.groups[group];
+                  });
+                }
+              }
+
+
 
               if(modified.event !== "$identify") {
                 allModifiedEvents.push(modified);

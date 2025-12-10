@@ -11,6 +11,7 @@ const generateUsers = async (count, startId = 0) => {
       email: `user-${startId + i}@example.com`,
       churned: false,
       session_count: 0,
+      groups: {},
       persona: (() => {
         // Weighted selection based on user_share
         const r = Math.random();
@@ -24,8 +25,8 @@ const generateUsers = async (count, startId = 0) => {
       })(),
     };
     
-    config.groups.forEach((group, index) => {
-      user[`group_${index}`] = `${group.name}-${Math.floor(Math.random() * Math.ceil((count + startId)/group.users_per_group))}`;
+    config.groups.forEach((group) => {
+      user.groups[group.name] = `${group.name}-${Math.floor(Math.random() * Math.ceil((count + startId)/group.users_per_group))}`;
     });
 
     users.push(user);
@@ -50,11 +51,11 @@ const dailySignups = async (currentTotalUsers) => {
     return generateUsers(signupCount, currentTotalUsers);
 }
 
-const replaySession = async ({ recordingId, userId, sessionId, timestamp, dryRun, runId }) => {
-  console.log(`Replaying session ${sessionId} for user ${userId} with recording ${recordingId} at ${timestamp}`);
+const replaySession = async ({ recordingId, user, sessionId, timestamp, dryRun, runId }) => {
+  console.log(`Replaying session ${sessionId} for user ${user.id} with recording ${recordingId} at ${timestamp}`);
   const replaySession = new ReplaySession({
     recordingId,
-    userId,
+    user,
     sessionId: sessionId,
     timestamp: timestamp,
     runId: runId,
@@ -95,7 +96,7 @@ const run = async ({ dryRun = true } = {}) => {
           const recordingId = persona.sessions[i].id;
           const sessionId = crypto.randomUUID();
 
-          await replaySession({ recordingId, userId: user.id, sessionId, timestamp: d.getTime() + (dailyUserCount * 1000 * 60) + (i * 1000 * 60), dryRun, runId });
+          await replaySession({ recordingId, user, sessionId, timestamp: d.getTime() + (dailyUserCount * 1000 * 60) + (i * 1000 * 60), dryRun, runId });
           console.log(`User ${user.id} generated session ${i} with recording ${recordingId}`);
         }
 

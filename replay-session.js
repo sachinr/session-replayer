@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import path, { dirname } from "path";
 import { fileURLToPath } from "url";
 import FeatureFlagManager from "./feature-flag-manager.js";
+import generationConfig from "./generation-config.json" with { type: "json" };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -13,6 +14,13 @@ dotenv.config();
 
 class PostHogSessionReplay {
   constructor(config) {
+
+    this.propertiesToRandomize = new Map();
+
+    Object.keys(generationConfig.randomized_ids).forEach((id) => {
+      this.propertiesToRandomize.set(id, generationConfig.randomized_ids[id] === "uuid" ? crypto.randomUUID() : Math.floor(Math.random() * 10000));
+    })
+
     this.config = {
       recordingId: config.recordingId,
       targetHost: config.targetHost || "us.i.posthog.com",
@@ -21,6 +29,7 @@ class PostHogSessionReplay {
       sessionId: config.sessionId,
       userId: config.userId,
       anonId: crypto.randomUUID(),
+      runId: config.runId,
       ...config,
     };
     this.flagManager = new FeatureFlagManager();
@@ -79,7 +88,7 @@ class PostHogSessionReplay {
     newSessionIdMap,
     newWindowIdMap
   ) {
-    console.log("🔍 Analyzing original recording...");
+    // console.log("🔍 Analyzing original recording...");
 
     // Work with the decompressed data
     if (
@@ -132,8 +141,10 @@ class PostHogSessionReplay {
         }
         if (chunk.properties.$is_identified) {
           chunk.properties.distinct_id = this.config.userId;
+          chunk.properties.$user_id = this.config.userId;
         } else {
           chunk.properties.distinct_id = this.config.anonId;
+          chunk.properties.$user_id = this.config.anonId;
         }
 
         // Update snapshot timestamps if present
@@ -149,7 +160,7 @@ class PostHogSessionReplay {
       }
     });
 
-    console.log(`✅ Modified ${chunks.length} chunks`);
+    // console.log(`✅ Modified ${chunks.length} chunks`);
 
     // Recompress the modified data (Node.js zlib is closer to original than gzip-js)
     const modifiedJson = JSON.stringify(chunks);
@@ -198,9 +209,9 @@ class PostHogSessionReplay {
     };
 
     if (dryRun) {
-      console.log(
-        `📊 Dry run: Skipping sending session recording to PostHog...\n`
-      );
+      // console.log(
+      //   `📊 Dry run: Skipping sending session recording to PostHog...\n`
+      // );
       return;
     }
 
@@ -211,12 +222,12 @@ class PostHogSessionReplay {
           responseBody += chunk;
         });
         res.on("end", () => {
-          if (verbose) {
-            console.log(`📥 Response: HTTP ${res.statusCode}`);
-            if (responseBody && responseBody.length < 500) {
-              console.log(`📥 Response Body: ${responseBody}`);
-            }
-          }
+          // if (verbose) {
+            // console.log(`📥 Response: HTTP ${res.statusCode}`);
+            // if (responseBody && responseBody.length < 500) {
+              // console.log(`📥 Response Body: ${responseBody}`);
+            // }
+          // }
           if (res.statusCode >= 200 && res.statusCode < 300) {
             resolve({
               status: res.statusCode,
@@ -243,9 +254,9 @@ class PostHogSessionReplay {
     const eventCount = batchData.batch.length;
 
     if (dryRun) {
-      console.log(
-        `📊 Dry run: Skipping sending batch of ${eventCount} events to PostHog...\n`
-      );
+      // console.log(
+      //   `📊 Dry run: Skipping sending batch of ${eventCount} events to PostHog...\n`
+      // );
       return;
     }
 
@@ -306,10 +317,10 @@ class PostHogSessionReplay {
         return null;
       }
 
-      console.log(
-        `🔍 Looking for events with session ID: ${originalSessionId}`
-      );
-      console.log(`📊 Total event entries in file: ${eventEntries.length}`);
+      // console.log(
+        // `🔍 Looking for events with session ID: ${originalSessionId}`
+      // );
+      // console.log(`📊 Total event entries in file: ${eventEntries.length}`);
 
       // Collect all events from all batches that match the session
       let allModifiedEvents = [];
@@ -347,8 +358,10 @@ class PostHogSessionReplay {
                 modified.properties.$session_id = newSessionId;
                 if (modified.properties.$is_identified) {
                   modified.properties.distinct_id = this.config.userId;
+                  modified.properties.$user_id = this.config.userId;
                 } else {
                   modified.properties.distinct_id = this.config.anonId;
+                  modified.properties.$user_id = this.config.anonId;
                 }
               }
 
@@ -359,40 +372,55 @@ class PostHogSessionReplay {
               delete modified.uuid;
               delete modified.offset;
               modified.properties.$lib = "posthog-session-replay";
-              modified.properties.$lib_version = `${new Date().toISOString()}`;
+              modified.properties.run_id = this.config.runId;
 
               // add flag properties if flags are assigned
               if (this.flagAssignments && Object.keys(this.flagAssignments).length > 0) {
                 this.flagManager.injectFlagProperties(modified, this.flagAssignments);
               }
 
-              allModifiedEvents.push(modified);
+              // within the context of a session 
+              // replace all instances of a property with a randomized value
+              // keep track of the value for the rest of the session
+              this.propertiesToRandomize.keys().forEach((propertyToRandomize) => {
+                if(modified.properties[propertyToRandomize]) {
+                  const originalValue = modified.properties[propertyToRandomize];
+
+                  modified.properties[propertyToRandomize] = this.propertiesToRandomize.get(propertyToRandomize);
+                  modified.properties['$current_url'] = modified.properties['$current_url']?.replace(originalValue, this.propertiesToRandomize.get(propertyToRandomize));
+                  modified.properties['$path_name'] = modified.properties['$path_name']?.replace(originalValue, this.propertiesToRandomize.get(propertyToRandomize));
+                }
+              });
+
+              if(modified.event !== "$identify") {
+                allModifiedEvents.push(modified);
+              }
             }
           }
         }
       }
 
       // Debug: show what session IDs we found
-      if (seenSessionIds.size > 0) {
-        console.log(
-          `🔍 Found ${seenSessionIds.size} unique session ID(s) in events:`
-        );
-        Array.from(seenSessionIds)
-          .slice(0, 10)
-          .forEach((id) => {
-            console.log(`   - ${id}`);
-          });
-        if (seenSessionIds.size > 10) {
-          console.log(`   ... and ${seenSessionIds.size - 10} more`);
-        }
-      }
+      // if (seenSessionIds.size > 0) {
+      //   console.log(
+      //     `🔍 Found ${seenSessionIds.size} unique session ID(s) in events:`
+      //   );
+      //   Array.from(seenSessionIds)
+      //     .slice(0, 10)
+      //     .forEach((id) => {
+      //       console.log(`   - ${id}`);
+      //     });
+      //   if (seenSessionIds.size > 10) {
+      //     console.log(`   ... and ${seenSessionIds.size - 10} more`);
+      //   }
+      // }
 
-      if (allModifiedEvents.length === 0) {
-        console.log(
-          `⚠️  No events found matching session ${originalSessionId}`
-        );
-        return null;
-      }
+      // if (allModifiedEvents.length === 0) {
+      //   console.log(
+      //     `⚠️  No events found matching session ${originalSessionId}`
+      //   );
+      //   return null;
+      // }
 
       // add exposure and conversion events if flags are assigned (for experiments)
       if (this.flagAssignments && Object.keys(this.flagAssignments).length > 0) {
@@ -417,17 +445,9 @@ class PostHogSessionReplay {
           this.config.timestamp
         );
 
-        console.log(
-          `✅ Added ${exposureEvents.length} exposure events and ${conversionEvents.length} conversion events`
-        );
-
         // insert exposure events at beginning, conversion events at end
         allModifiedEvents = [...exposureEvents, ...allModifiedEvents, ...conversionEvents];
       }
-
-      console.log(
-        `✅ Found ${allModifiedEvents.length} events for session ${originalSessionId}`
-      );
 
       // need batch for histroical imports
       return {
@@ -460,14 +480,14 @@ class PostHogSessionReplay {
               snapshot.data = buffer.toString("latin1");
               // Remove the flag since we've restored original format
               delete snapshot._original_compressed;
-              console.log(
-                `🔄 Re-compressed DOM snapshot back to original format`
-              );
+              // console.log(
+              //   `🔄 Re-compressed DOM snapshot back to original format`
+              // );
             } catch (error) {
-              console.warn(
-                "Failed to re-compress DOM snapshot:",
-                error.message
-              );
+              // console.warn(
+              //   "Failed to re-compress DOM snapshot:",
+              //   error.message
+              // );
             }
           }
         });
@@ -476,7 +496,7 @@ class PostHogSessionReplay {
   }
 
   async replaySession({ dryRun = true } = {}) {
-    console.log("🎬 Creating new session from captured recording...\n");
+    // console.log("🎬 Creating new session from captured recording...\n");
 
     // Load flags and assign to this user
     try {
@@ -523,43 +543,42 @@ class PostHogSessionReplay {
           newWindowIds
         );
 
-        // Find and modify events for this session
-
-        for await (const [
-          originalSessionId,
-          newSessionId,
-        ] of newSessionIds.entries()) {
-          const batchData = await this.loadAndModifyEvents(
-            originalSessionId,
-            newSessionId
-          );
-
-          // Send batch if events were found
-          if (batchData) {
-            await this.sendEventsToPostHog({ batchData, dryRun });
-          }
-        }
-
         // Send session recording to PostHog
-        console.log("🚀 Sending session recording to PostHog...");
+        // console.log("🚀 Sending session recording to PostHog...");
         const recordingResponse = await this.sendToPostHog({
           compressedData: compressed,
           dryRun,
         });
         recordingResponses.push(recordingResponse);
 
-        console.log(`\n✅ New session created successfully!`);
-        console.log(
-          `📈 Recording Response: HTTP ${recordingResponses
-            .map((r) => r?.status || "N/A")
-            .join(", ")}`
+        // console.log(`\n✅ New session created successfully!`);
+        // console.log(
+        //   `📈 Recording Response: HTTP ${recordingResponses
+        //     .map((r) => r?.status || "N/A")
+        //     .join(", ")}`
+        // );
+        // console.log(`🔍 Session details:`);
+        // console.log(`   Original Session: ${identifiers.originalSessionId}`);
+        // console.log(`   New Session:      ${identifiers.newSessionId}`);
+      }
+
+
+        // Find and modify events for this session
+
+      for await (const [
+        originalSessionId,
+        newSessionId,
+      ] of newSessionIds.entries()) {
+        const batchData = await this.loadAndModifyEvents(
+          originalSessionId,
+          newSessionId
         );
-        console.log(`🔍 Session details:`);
-        console.log(`   Original Session: ${identifiers.originalSessionId}`);
-        console.log(`   New Session:      ${identifiers.newSessionId}`);
-        console.log(
-          `   User ID:          ${identifiers.originalUserId} (same user)`
-        );
+
+        // Send batch if events were found
+        if (batchData) {
+          console.log('sending')
+          await this.sendEventsToPostHog({ batchData, dryRun });
+        }
       }
 
       return {

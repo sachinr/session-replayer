@@ -138,8 +138,10 @@ class PostHogSessionReplay {
         }
         if (chunk.properties.$is_identified) {
           chunk.properties.distinct_id = this.config.userId;
+          chunk.properties.$user_id = this.config.userId;
         } else {
           chunk.properties.distinct_id = this.config.anonId;
+          chunk.properties.$user_id = this.config.anonId;
         }
 
         // Update snapshot timestamps if present
@@ -353,8 +355,10 @@ class PostHogSessionReplay {
                 modified.properties.$session_id = newSessionId;
                 if (modified.properties.$is_identified) {
                   modified.properties.distinct_id = this.config.userId;
+                  modified.properties.$user_id = this.config.userId;
                 } else {
                   modified.properties.distinct_id = this.config.anonId;
+                  modified.properties.$user_id = this.config.anonId;
                 }
               }
 

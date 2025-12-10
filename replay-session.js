@@ -20,6 +20,7 @@ class PostHogSessionReplay {
       sessionId: config.sessionId,
       userId: config.userId,
       anonId: crypto.randomUUID(),
+      runId: config.runId,
       ...config,
     };
   }
@@ -356,7 +357,7 @@ class PostHogSessionReplay {
               delete modified.uuid;
               delete modified.offset;
               modified.properties.$lib = "posthog-session-replay";
-              modified.properties.$lib_version = `${new Date().toISOString()}`;
+              modified.properties.run_id = this.config.runId;
 
               allModifiedEvents.push(modified);
             }

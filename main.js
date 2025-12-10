@@ -50,13 +50,14 @@ const dailySignups = async (currentTotalUsers) => {
     return generateUsers(signupCount, currentTotalUsers);
 }
 
-const replaySession = async (recordingId, userId, sessionId, timestamp, dryRun) => {
+const replaySession = async ({ recordingId, userId, sessionId, timestamp, dryRun, runId }) => {
   console.log(`Replaying session ${sessionId} for user ${userId} with recording ${recordingId} at ${timestamp}`);
   const replaySession = new ReplaySession({
     recordingId,
     userId,
-    sessionId,
-    timestamp,
+    sessionId: sessionId,
+    timestamp: timestamp,
+    runId: runId,
   });
   await replaySession.replaySession({ dryRun });
 }
@@ -68,6 +69,8 @@ const run = async ({ dryRun = true } = {}) => {
   const endDate = new Date(config.end_date);
   // calculate initial DAU (% of total users)
   let dau = config.starting_user_count * config.dau_percentage;
+  const runId = crypto.randomUUID();
+  console.log(`🔍 Run ID: ${runId}`);
 
   // generate sessions for each day 
   for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
@@ -92,7 +95,7 @@ const run = async ({ dryRun = true } = {}) => {
           const recordingId = persona.sessions[i].id;
           const sessionId = crypto.randomUUID();
 
-          await replaySession(recordingId, user.id, sessionId, d.getTime() + (dailyUserCount * 1000 * 60) + (i * 1000 * 60), dryRun);
+          await replaySession({ recordingId, userId: user.id, sessionId, timestamp: d.getTime() + (dailyUserCount * 1000 * 60) + (i * 1000 * 60), dryRun, runId });
           console.log(`User ${user.id} generated session ${i} with recording ${recordingId}`);
         }
 
@@ -116,6 +119,7 @@ const run = async ({ dryRun = true } = {}) => {
     console.log(`Total active users: ${users.filter(u => !u.churned).length}`);
     console.log(`DAU: ${dau}`);
   }
+  console.log(`Run ${runId} completed`);
 };
 
 

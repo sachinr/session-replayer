@@ -77,7 +77,7 @@ class PostHogSessionReplay {
     newSessionIdMap,
     newWindowIdMap
   ) {
-    console.log("🔍 Analyzing original recording...");
+    // console.log("🔍 Analyzing original recording...");
 
     // Work with the decompressed data
     if (
@@ -147,7 +147,7 @@ class PostHogSessionReplay {
       }
     });
 
-    console.log(`✅ Modified ${chunks.length} chunks`);
+    // console.log(`✅ Modified ${chunks.length} chunks`);
 
     // Recompress the modified data (Node.js zlib is closer to original than gzip-js)
     const modifiedJson = JSON.stringify(chunks);
@@ -196,9 +196,9 @@ class PostHogSessionReplay {
     };
 
     if (dryRun) {
-      console.log(
-        `📊 Dry run: Skipping sending session recording to PostHog...\n`
-      );
+      // console.log(
+      //   `📊 Dry run: Skipping sending session recording to PostHog...\n`
+      // );
       return;
     }
 
@@ -209,12 +209,12 @@ class PostHogSessionReplay {
           responseBody += chunk;
         });
         res.on("end", () => {
-          if (verbose) {
-            console.log(`📥 Response: HTTP ${res.statusCode}`);
-            if (responseBody && responseBody.length < 500) {
-              console.log(`📥 Response Body: ${responseBody}`);
-            }
-          }
+          // if (verbose) {
+            // console.log(`📥 Response: HTTP ${res.statusCode}`);
+            // if (responseBody && responseBody.length < 500) {
+              // console.log(`📥 Response Body: ${responseBody}`);
+            // }
+          // }
           if (res.statusCode >= 200 && res.statusCode < 300) {
             resolve({
               status: res.statusCode,
@@ -241,9 +241,9 @@ class PostHogSessionReplay {
     const eventCount = batchData.batch.length;
 
     if (dryRun) {
-      console.log(
-        `📊 Dry run: Skipping sending batch of ${eventCount} events to PostHog...\n`
-      );
+      // console.log(
+      //   `📊 Dry run: Skipping sending batch of ${eventCount} events to PostHog...\n`
+      // );
       return;
     }
 
@@ -304,10 +304,10 @@ class PostHogSessionReplay {
         return null;
       }
 
-      console.log(
-        `🔍 Looking for events with session ID: ${originalSessionId}`
-      );
-      console.log(`📊 Total event entries in file: ${eventEntries.length}`);
+      // console.log(
+        // `🔍 Looking for events with session ID: ${originalSessionId}`
+      // );
+      // console.log(`📊 Total event entries in file: ${eventEntries.length}`);
 
       // Collect all events from all batches that match the session
       const allModifiedEvents = [];
@@ -366,30 +366,30 @@ class PostHogSessionReplay {
       }
 
       // Debug: show what session IDs we found
-      if (seenSessionIds.size > 0) {
-        console.log(
-          `🔍 Found ${seenSessionIds.size} unique session ID(s) in events:`
-        );
-        Array.from(seenSessionIds)
-          .slice(0, 10)
-          .forEach((id) => {
-            console.log(`   - ${id}`);
-          });
-        if (seenSessionIds.size > 10) {
-          console.log(`   ... and ${seenSessionIds.size - 10} more`);
-        }
-      }
+      // if (seenSessionIds.size > 0) {
+      //   console.log(
+      //     `🔍 Found ${seenSessionIds.size} unique session ID(s) in events:`
+      //   );
+      //   Array.from(seenSessionIds)
+      //     .slice(0, 10)
+      //     .forEach((id) => {
+      //       console.log(`   - ${id}`);
+      //     });
+      //   if (seenSessionIds.size > 10) {
+      //     console.log(`   ... and ${seenSessionIds.size - 10} more`);
+      //   }
+      // }
 
-      if (allModifiedEvents.length === 0) {
-        console.log(
-          `⚠️  No events found matching session ${originalSessionId}`
-        );
-        return null;
-      }
+      // if (allModifiedEvents.length === 0) {
+      //   console.log(
+      //     `⚠️  No events found matching session ${originalSessionId}`
+      //   );
+      //   return null;
+      // }
 
-      console.log(
-        `✅ Found ${allModifiedEvents.length} events for session ${originalSessionId}`
-      );
+      // console.log(
+      //   `✅ Found ${allModifiedEvents.length} events for session ${originalSessionId}`
+      // );
 
       // need batch for histroical imports
       return {
@@ -422,14 +422,14 @@ class PostHogSessionReplay {
               snapshot.data = buffer.toString("latin1");
               // Remove the flag since we've restored original format
               delete snapshot._original_compressed;
-              console.log(
-                `🔄 Re-compressed DOM snapshot back to original format`
-              );
+              // console.log(
+              //   `🔄 Re-compressed DOM snapshot back to original format`
+              // );
             } catch (error) {
-              console.warn(
-                "Failed to re-compress DOM snapshot:",
-                error.message
-              );
+              // console.warn(
+              //   "Failed to re-compress DOM snapshot:",
+              //   error.message
+              // );
             }
           }
         });
@@ -438,7 +438,7 @@ class PostHogSessionReplay {
   }
 
   async replaySession({ dryRun = true } = {}) {
-    console.log("🎬 Creating new session from captured recording...\n");
+    // console.log("🎬 Creating new session from captured recording...\n");
 
     try {
       // Load recordings
@@ -491,24 +491,22 @@ class PostHogSessionReplay {
         }
 
         // Send session recording to PostHog
-        console.log("🚀 Sending session recording to PostHog...");
+        // console.log("🚀 Sending session recording to PostHog...");
         const recordingResponse = await this.sendToPostHog({
           compressedData: compressed,
           dryRun,
         });
         recordingResponses.push(recordingResponse);
 
-        console.log(`\n✅ New session created successfully!`);
-        console.log(
-          `📈 Recording Response: HTTP ${recordingResponses
-            .map((r) => r?.status || "N/A")
-            .join(", ")}`
-        );
-        console.log(`🔍 Session details:`);
-        console.log(`   Original Session: ${identifiers.originalSessionId}`);
-        console.log(`   New Session:      ${identifiers.newSessionId}`);
-        console.log(
-          `   User ID:          ${identifiers.originalUserId} (same user)`
+        // console.log(`\n✅ New session created successfully!`);
+        // console.log(
+        //   `📈 Recording Response: HTTP ${recordingResponses
+        //     .map((r) => r?.status || "N/A")
+        //     .join(", ")}`
+        // );
+        // console.log(`🔍 Session details:`);
+        // console.log(`   Original Session: ${identifiers.originalSessionId}`);
+        // console.log(`   New Session:      ${identifiers.newSessionId}`);
         );
       }
 

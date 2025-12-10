@@ -5,7 +5,7 @@ import ReplaySession from "./replay-session.js";
 const generateUsers = async (count, startId = 0) => {
   const users = [];
   for (let i = 0; i < count; i++) {
-    users.push({
+    const user ={
       id: `user-${startId + i}`,
       name: `User ${startId + i}`,
       email: `user-${startId + i}@example.com`,
@@ -22,7 +22,13 @@ const generateUsers = async (count, startId = 0) => {
         // fallback (shouldn't happen if shares sum to 1)
         return config.personas[config.personas.length - 1].name;
       })(),
+    };
+    
+    config.groups.forEach((group, index) => {
+      user[`group_${index}`] = `${group.name}-${Math.floor(Math.random() * Math.ceil((count + startId)/group.users_per_group))}`;
     });
+
+    users.push(user);
   }
   return users;
 };

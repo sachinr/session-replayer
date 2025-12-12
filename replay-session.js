@@ -30,6 +30,7 @@ class PostHogSessionReplay {
       userId: config.user.id,
       anonId: crypto.randomUUID(),
       groups: config.user.groups,
+      email: config.user.email,
       runId: config.runId,
       ...config,
     };
@@ -404,6 +405,10 @@ class PostHogSessionReplay {
                 }
               }
 
+              if(modified.event === "$set" && modified.properties.$set.email) {
+                modified.properties.$set.email = this.config.email
+              }
+
 
 
               if(modified.event !== "$identify") {
@@ -557,24 +562,16 @@ class PostHogSessionReplay {
           newWindowIds
         );
 
-        // Send session recording to PostHog
-        // console.log("🚀 Sending session recording to PostHog...");
-        const recordingResponse = await this.sendToPostHog({
-          compressedData: compressed,
-          dryRun,
-        });
-        recordingResponses.push(recordingResponse);
-
-        // console.log(`\n✅ New session created successfully!`);
-        // console.log(
-        //   `📈 Recording Response: HTTP ${recordingResponses
-        //     .map((r) => r?.status || "N/A")
-        //     .join(", ")}`
-        // );
-        // console.log(`🔍 Session details:`);
-        // console.log(`   Original Session: ${identifiers.originalSessionId}`);
-        // console.log(`   New Session:      ${identifiers.newSessionId}`);
-      }
+          // console.log(`\n✅ New session created successfully!`);
+          // console.log(
+          //   `📈 Recording Response: HTTP ${recordingResponses
+          //     .map((r) => r?.status || "N/A")
+          //     .join(", ")}`
+          // );
+          // console.log(`🔍 Session details:`);
+          // console.log(`   Original Session: ${identifiers.originalSessionId}`);
+          // console.log(`   New Session:      ${identifiers.newSessionId}`);
+        }
 
 
         // Find and modify events for this session

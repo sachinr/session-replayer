@@ -8,13 +8,12 @@
     "something_id": "uuid",
     "another_id": "number"
   },
-  "groups": {
-    "group_0": {
-      "name": "Organization",
-      "starting_count": 10,
-      "growth_rate": 0.02
+  "groups": [
+    {
+      "name": "organization",
+      "users_per_group": 5
     }
-  },
+  ],
   "personas": [
     {
       "name": "Persona 1",

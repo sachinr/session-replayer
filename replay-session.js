@@ -17,9 +17,11 @@ class PostHogSessionReplay {
 
     this.propertiesToRandomize = new Map();
 
-    Object.keys(generationConfig.randomized_ids).forEach((id) => {
-      this.propertiesToRandomize.set(id, generationConfig.randomized_ids[id] === "uuid" ? crypto.randomUUID() : Math.floor(Math.random() * 10000));
-    })
+    if(generationConfig.randomized_ids) {
+      Object.keys(generationConfig.randomized_ids).forEach((id) => {
+          this.propertiesToRandomize.set(id, generationConfig.randomized_ids[id] === "uuid" ? crypto.randomUUID() : Math.floor(Math.random() * 10000));
+      })
+    }
 
     this.config = {
       recordingId: config.recordingId,
@@ -154,8 +156,8 @@ class PostHogSessionReplay {
           Array.isArray(chunk.properties.$snapshot_data)
         ) {
           chunk.properties.$snapshot_data.forEach((snapshot) => {
-            // const offset = snapshot.timestamp - originalTimestamp;
-            snapshot.timestamp = snapshot.timestamp - 86400000;
+            const offset = snapshot.timestamp - originalTimestamp;
+            snapshot.timestamp = offset + this.config.timestamp;
           });
         }
       }
@@ -578,11 +580,13 @@ class PostHogSessionReplay {
 
         // Send session recording to PostHog
         // console.log("🚀 Sending session recording to PostHog...");
-        const recordingResponse = await this.sendToPostHog({
-          compressedData: compressed,
-          dryRun,
-        });
-        recordingResponses.push(recordingResponse);
+        if(this.config.timestamp > (new Date().getTime() - (1000 * 60 * 60 * 24 * 7))) {
+          const recordingResponse = await this.sendToPostHog({
+            compressedData: compressed,
+            dryRun,
+          });
+          recordingResponses.push(recordingResponse);
+        }
 
         // console.log(`\n✅ New session created successfully!`);
         // console.log(

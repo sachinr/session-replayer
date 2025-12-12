@@ -17,9 +17,11 @@ class PostHogSessionReplay {
 
     this.propertiesToRandomize = new Map();
 
-    Object.keys(generationConfig.randomized_ids).forEach((id) => {
-      this.propertiesToRandomize.set(id, generationConfig.randomized_ids[id] === "uuid" ? crypto.randomUUID() : Math.floor(Math.random() * 10000));
-    })
+    if(generationConfig.randomized_ids) {
+      Object.keys(generationConfig.randomized_ids).forEach((id) => {
+          this.propertiesToRandomize.set(id, generationConfig.randomized_ids[id] === "uuid" ? crypto.randomUUID() : Math.floor(Math.random() * 10000));
+      })
+    }
 
     this.config = {
       recordingId: config.recordingId,
@@ -155,8 +157,8 @@ class PostHogSessionReplay {
           Array.isArray(chunk.properties.$snapshot_data)
         ) {
           chunk.properties.$snapshot_data.forEach((snapshot) => {
-            // const offset = snapshot.timestamp - originalTimestamp;
-            snapshot.timestamp = snapshot.timestamp - 86400000;
+            const offset = snapshot.timestamp - originalTimestamp;
+            snapshot.timestamp = offset + this.config.timestamp;
           });
         }
       }
@@ -488,26 +490,45 @@ class PostHogSessionReplay {
     events.forEach((event) => {
       if (event.properties && event.properties.$snapshot_data) {
         event.properties.$snapshot_data.forEach((snapshot) => {
+          // Recompress type 2 DOM snapshots that we decompressed
           if (
             snapshot.type === 2 &&
             snapshot._original_compressed &&
             typeof snapshot.data === "string"
           ) {
             try {
-              // Re-compress the DOM data back to its original gzipped latin1 format
               const buffer = zlib.gzipSync(Buffer.from(snapshot.data, "utf8"));
               snapshot.data = buffer.toString("latin1");
-              // Remove the flag since we've restored original format
-              delete snapshot._original_compressed;
-              // console.log(
-              //   `🔄 Re-compressed DOM snapshot back to original format`
-              // );
             } catch (error) {
-              // console.warn(
-              //   "Failed to re-compress DOM snapshot:",
-              //   error.message
-              // );
+              // Ignore; leave as-is if recompression fails
             }
+          }
+
+          // Recompress type 3 incremental snapshots whose gzip strings we expanded
+          if (
+            snapshot.type === 3 &&
+            snapshot._original_compressed &&
+            snapshot.data &&
+            typeof snapshot.data === "object"
+          ) {
+            const compressableKeys = ["texts", "attributes", "removes", "adds"];
+            compressableKeys.forEach((key) => {
+              if (typeof snapshot.data[key] === "string") {
+                try {
+                  const buffer = zlib.gzipSync(
+                    Buffer.from(snapshot.data[key], "utf8")
+                  );
+                  snapshot.data[key] = buffer.toString("latin1");
+                } catch (error) {
+                  // Ignore per-key failures
+                }
+              }
+            });
+          }
+
+          // Clear flag once we've attempted recompression
+          if (snapshot._original_compressed) {
+            delete snapshot._original_compressed;
           }
         });
       }
@@ -562,17 +583,26 @@ class PostHogSessionReplay {
           newWindowIds
         );
 
-          // console.log(`\n✅ New session created successfully!`);
-          // console.log(
-          //   `📈 Recording Response: HTTP ${recordingResponses
-          //     .map((r) => r?.status || "N/A")
-          //     .join(", ")}`
-          // );
-          // console.log(`🔍 Session details:`);
-          // console.log(`   Original Session: ${identifiers.originalSessionId}`);
-          // console.log(`   New Session:      ${identifiers.newSessionId}`);
+        // Send session recording to PostHog
+        // console.log("🚀 Sending session recording to PostHog...");
+        if(this.config.timestamp > (new Date().getTime() - (1000 * 60 * 60 * 24 * 7))) {
+          const recordingResponse = await this.sendToPostHog({
+            compressedData: compressed,
+            dryRun,
+          });
+          recordingResponses.push(recordingResponse);
         }
 
+        // console.log(`\n✅ New session created successfully!`);
+        // console.log(
+        //   `📈 Recording Response: HTTP ${recordingResponses
+        //     .map((r) => r?.status || "N/A")
+        //     .join(", ")}`
+        // );
+        // console.log(`🔍 Session details:`);
+        // console.log(`   Original Session: ${identifiers.originalSessionId}`);
+        // console.log(`   New Session:      ${identifiers.newSessionId}`);
+      }
 
         // Find and modify events for this session
 

@@ -25,7 +25,7 @@ const generateUsers = async (count, startId = 0) => {
       })(),
     };
     
-    config.groups.forEach((group) => {
+    config.groups?.forEach((group) => {
       user.groups[group.name] = `${group.name}-${Math.floor(Math.random() * Math.ceil((count + startId)/group.users_per_group))}`;
     });
 
